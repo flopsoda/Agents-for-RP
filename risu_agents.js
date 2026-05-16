@@ -1,29 +1,28 @@
-//@name risu_multiagent
+//@name risu_agents
 //@display-name Agents!
 //@api 3.0
 //@version 1.0.0
-//@arg agent_provider string Analysis agent provider label. e.g. ollama
-//@arg agent_base_url string Analysis agent API base URL. e.g. https://ollama.com/v1, https://api.openai.com/v1, https://api.anthropic.com/v1, or Vertex AI OpenAI-compatible endpoint
-//@arg agent_api_key string Analysis agent API key
-//@arg agent_model string Analysis agent model. e.g. gemini-3-flash-preview:cloud
-//@arg agent_temperature string Analysis agent temperature (default: 0.7)
-//@arg agent_max_tokens string Analysis agent max tokens (blank = provider default)
-//@arg context_window int Recent messages per agent (default: 10)
-//@arg agent_debug_log string Print MultiAgent prompt flow to console. true/false (default: true)
-//@arg agent_pipeline_json string Dynamic MultiAgent pipeline JSON
-//@arg agent_model_presets_json string Model presets JSON
-//@arg agent_provider_keys_json string Provider API keys JSON
+//@arg agents_provider string Analysis agent provider label. e.g. ollama
+//@arg agents_base_url string Analysis agent API base URL. e.g. https://ollama.com/v1, https://api.openai.com/v1, https://api.anthropic.com/v1, or Vertex AI OpenAI-compatible endpoint
+//@arg agents_api_key string Analysis agent API key
+//@arg agents_model string Analysis agent model. e.g. gemini-3-flash-preview:cloud
+//@arg agents_temperature string Analysis agent temperature (default: 0.7)
+//@arg agents_max_tokens string Analysis agent max tokens (blank = provider default)
+//@arg agents_context_window int Recent messages per agent (default: 10)
+//@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: true)
+//@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
+//@arg agents_model_presets_json string Model presets JSON
+//@arg agents_provider_keys_json string Provider API keys JSON
 
 /**
  * Agents! — RisuAI Plugin (Browser, API v3.0)
  *
  * 파이프라인:
- *   beforeRequest 훅
- *     → [세계관 에이전트]  nativeFetch → context_world
- *     → [플롯 에이전트]    nativeFetch → context_plot
- *     → [캐릭터 에이전트]  nativeFetch → context_char
- *     → system 프롬프트에 3개 컨텍스트 주입
- *   메인 LLM (유저 설정 모델) — 검수 에이전트 역할, 최종 응답 생성
+ *   Row 1-4: pre-agent note generation
+ *   Row 5: RisuAI main model
+ *   Row 6-9: post-agent response editing
+ *   Run Inspector: per-run prompts, outputs, and status
+ *   Per-agent memory: optional note-backed memory for pre-agents
  */
 
 (async () => {
@@ -39,8 +38,9 @@
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
     const RUN_LOG_VERSION = 1;
     const SETTINGS_UI_ID = 'risu-agents-settings';
-    const HAMBURGER_UI_ID = 'risu-multiagent-lite-hamburger';
-    const CHAT_UI_ID = 'risu-multiagent-lite-chat';
+    const HAMBURGER_UI_ID = 'risu-agents-hamburger';
+    const CHAT_UI_ID = 'risu-agents-chat';
+    const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: ['gemini-3-flash-preview:cloud', 'deepseek-v4-pro:cloud', 'deepseek-v4-flash:cloud'],
       openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
@@ -55,14 +55,14 @@
     // ── 설정 로드 ─────────────────────────────────────────────────────────────
 
     async function getConfig() {
-      const provider = (await Risuai.getArgument('agent_provider')) || DEFAULT_AGENT_PROVIDER;
-      const baseUrl = normalizeUrl((await Risuai.getArgument('agent_base_url')) || DEFAULT_AGENT_BASE_URL);
-      const legacyApiKey  = (await Risuai.getArgument('agent_api_key'))  || '';
-      const model   = (await Risuai.getArgument('agent_model'))    || DEFAULT_AGENT_MODEL;
-      const temperature = parseFloat((await Risuai.getArgument('agent_temperature')) || '0.7');
-      const maxTokens = parseOptionalInt(await Risuai.getArgument('agent_max_tokens'));
-      const window  = Math.max(1, parseInt((await Risuai.getArgument('context_window')) || '10') || 10);
-      const debugLog = parseBool(await Risuai.getArgument('agent_debug_log'), true);
+      const provider = (await Risuai.getArgument('agents_provider')) || DEFAULT_AGENT_PROVIDER;
+      const baseUrl = normalizeUrl((await Risuai.getArgument('agents_base_url')) || DEFAULT_AGENT_BASE_URL);
+      const configuredApiKey  = (await Risuai.getArgument('agents_api_key'))  || '';
+      const model   = (await Risuai.getArgument('agents_model'))    || DEFAULT_AGENT_MODEL;
+      const temperature = parseFloat((await Risuai.getArgument('agents_temperature')) || '0.7');
+      const maxTokens = parseOptionalInt(await Risuai.getArgument('agents_max_tokens'));
+      const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
+      const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), true);
       const legacy = {
         provider,
         baseUrl,
@@ -72,22 +72,22 @@
         window,
       };
       const providerKeys = parseProviderKeys(
-        await Risuai.getArgument('agent_provider_keys_json'),
+        await Risuai.getArgument('agents_provider_keys_json'),
         provider,
-        legacyApiKey,
+        configuredApiKey,
         debugLog,
       );
       const modelPresets = parseModelPresets(
-        await Risuai.getArgument('agent_model_presets_json'),
+        await Risuai.getArgument('agents_model_presets_json'),
         legacy,
         debugLog,
       );
-      const apiKey = getProviderApiKey(providerKeys, provider) || legacyApiKey;
+      const apiKey = getProviderApiKey(providerKeys, provider) || configuredApiKey;
       return {
         provider,
         baseUrl,
         apiKey,
-        legacyApiKey,
+        configuredApiKey,
         providerKeys,
         modelPresets,
         model,
@@ -110,7 +110,7 @@
       return callOpenAICompatibleAgent(conf, messages);
     }
 
-    function parseProviderKeys(raw, legacyProvider, legacyApiKey, debugLog) {
+    function parseProviderKeys(raw, configuredProvider, configuredApiKey, debugLog) {
       const keys = {};
       if (raw) {
         try {
@@ -127,10 +127,10 @@
         }
       }
 
-      const legacyKey = String(legacyApiKey || '');
-      const normalizedLegacyProvider = normalizeProviderValue(legacyProvider || DEFAULT_AGENT_PROVIDER);
-      if (legacyKey && normalizedLegacyProvider && !keys[normalizedLegacyProvider]) {
-        keys[normalizedLegacyProvider] = legacyKey;
+      const configuredKey = String(configuredApiKey || '');
+      const normalizedConfiguredProvider = normalizeProviderValue(configuredProvider || DEFAULT_AGENT_PROVIDER);
+      if (configuredKey && normalizedConfiguredProvider && !keys[normalizedConfiguredProvider]) {
+        keys[normalizedConfiguredProvider] = configuredKey;
       }
       return keys;
     }
@@ -682,13 +682,13 @@
     }
 
     async function getPipelineConfig(conf) {
-      const raw = await Risuai.getArgument('agent_pipeline_json');
+      const raw = await Risuai.getArgument('agents_pipeline_json');
       if (!raw) return normalizePipelineConfig(defaultPipelineConfig(), conf?.modelPresets, conf);
 
       try {
         return normalizePipelineConfig(JSON.parse(String(raw)), conf?.modelPresets, conf);
       } catch (err) {
-        if (conf?.debugLog) console.log(`MultiAgent pipeline JSON parse failed: ${err.message}`);
+        if (conf?.debugLog) console.log(`Agents! pipeline JSON parse failed: ${err.message}`);
         return defaultPipelineConfig();
       }
     }
@@ -967,11 +967,11 @@
     }
 
     function agentMemoryKey(agent, scope) {
-      return `agents_memory:${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}:${sanitizeMemoryKeyPart(agent.id)}`;
+      return `${'risu_agents_' + 'memory:'}${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}:${sanitizeMemoryKeyPart(agent.id)}`;
     }
 
     function agentRunLogKey(scope) {
-      return `agents_run:${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}`;
+      return `${'risu_agents_' + 'run:'}${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}`;
     }
 
     async function loadAgentMemory(agent, scope, debugLog) {
@@ -1145,7 +1145,7 @@
           const agentConf = resolveAgentConfig(agent, conf);
           if (!agentConf.apiKey) {
             const content = `(실패: ${agentConf.provider} provider API key 없음)`;
-            console.log(`MultiAgent pre-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
+            console.log(`Agents! pre-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
             return {
               ...runAgentMeta(agent, conf),
               content,
@@ -1165,11 +1165,11 @@
             agentMemory: agentMemory.value || EMPTY_AGENT_MEMORY,
           });
 
-          if (conf.debugLog) logPromptFlow(`MultiAgent debug: Row ${row + 1} ${agent.name} prompt`, prompt, true);
+          if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} prompt`, prompt, true);
 
           try {
             const content = await callAgent(agentConf, prompt);
-            if (conf.debugLog) logTextBlock(`MultiAgent debug: Row ${row + 1} ${agent.name} result`, content);
+            if (conf.debugLog) logTextBlock(`Agents! debug: Row ${row + 1} ${agent.name} result`, content);
             if (agentMemory.enabled) {
               const parsed = parseMemoryAgentOutput(content);
               if (parsed.ok) {
@@ -1209,7 +1209,7 @@
             };
           } catch (err) {
             const content = `(실패: ${err.message})`;
-            console.log(`MultiAgent pre-agent failed (${agent.name}): ${err.message}`);
+            console.log(`Agents! pre-agent failed (${agent.name}): ${err.message}`);
             return {
               ...runAgentMeta(agent, conf),
               content,
@@ -1279,7 +1279,7 @@
 
         const agentConf = resolveAgentConfig(agent, conf);
         if (!agentConf.apiKey) {
-          console.log(`MultiAgent post-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
+          console.log(`Agents! post-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
           postResults.push({
             ...runAgentMeta(agent, conf),
             status: 'skipped',
@@ -1296,7 +1296,7 @@
           currentResponse,
         });
 
-        if (conf.debugLog) logPromptFlow(`MultiAgent debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
+        if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
 
         try {
           const nextResponse = String(await callAgent(agentConf, prompt) || '').trim();
@@ -1309,9 +1309,9 @@
               rawOutput: nextResponse,
             });
             currentResponse = nextResponse;
-            if (conf.debugLog) logTextBlock(`MultiAgent debug: Row ${row + 1} ${agent.name} post-agent result`, currentResponse);
+            if (conf.debugLog) logTextBlock(`Agents! debug: Row ${row + 1} ${agent.name} post-agent result`, currentResponse);
           } else {
-            console.log(`MultiAgent post-agent returned empty response (${agent.name}); keeping previous response`);
+            console.log(`Agents! post-agent returned empty response (${agent.name}); keeping previous response`);
             postResults.push({
               ...runAgentMeta(agent, conf),
               status: 'empty',
@@ -1321,7 +1321,7 @@
             });
           }
         } catch (err) {
-          console.log(`MultiAgent post-agent failed (${agent.name}): ${err.message}`);
+          console.log(`Agents! post-agent failed (${agent.name}): ${err.message}`);
           postResults.push({
             ...runAgentMeta(agent, conf),
             status: 'failed',
@@ -1350,7 +1350,7 @@
       const injection = [
         '',
         '---',
-        '[MultiAgent RP 분석 컨텍스트]',
+        '[Agents! 분석 컨텍스트]',
         '',
         formatAgentNotes(orderedNotes, '(에이전트 노트 없음)'),
         '',
@@ -1397,12 +1397,13 @@
       await unregisterKnownUIPart(SETTINGS_UI_ID);
       await unregisterKnownUIPart(HAMBURGER_UI_ID);
       await unregisterKnownUIPart(CHAT_UI_ID);
+      await Promise.all(LEGACY_UI_IDS.map(id => unregisterKnownUIPart(id)));
 
       try {
         const setting = await Risuai.registerSetting('Agents! 설정', openLiteDashboard, menuIcon, 'none', SETTINGS_UI_ID);
         console.log('Agents! setting registered', setting?.id || setting || '');
       } catch (err) {
-        console.log(`MultiAgent Lite setting registration failed: ${err.message}`);
+        console.log(`Agents! setting registration failed: ${err.message}`);
       }
 
       try {
@@ -1415,7 +1416,7 @@
         }, openRunInspector);
         console.log('Agents! hamburger button registered', button?.id || button || '');
       } catch (err) {
-        console.log(`MultiAgent Lite hamburger button registration failed: ${err.message}`);
+        console.log(`Agents! hamburger button registration failed: ${err.message}`);
       }
 
       try {
@@ -1428,7 +1429,7 @@
         }, openLiteDashboard);
         console.log('Agents! chat menu button registered', chatButton?.id || chatButton || '');
       } catch (err) {
-        console.log(`MultiAgent Lite chat menu button registration failed: ${err.message}`);
+        console.log(`Agents! chat menu button registration failed: ${err.message}`);
       }
     }
 
@@ -1785,8 +1786,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
   <div class="card">
     <h2>공통 설정</h2>
     <div class="field">
-      <label for="agent_debug_log">Debug Log</label>
-      <select id="agent_debug_log">
+      <label for="agents_debug_log">Debug Log</label>
+      <select id="agents_debug_log">
         <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
         <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
       </select>
@@ -2331,12 +2332,12 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       return {
         provider: firstPreset.provider,
         baseUrl: normalizeUrl(firstPreset.baseUrl || DEFAULT_AGENT_BASE_URL),
-        apiKey: normalizedKeys[firstPreset.provider] || initialConf.legacyApiKey || '',
+        apiKey: normalizedKeys[firstPreset.provider] || initialConf.configuredApiKey || '',
         model: firstPreset.model || DEFAULT_AGENT_MODEL,
         temperature: parseAgentFloat(firstPreset.temperature, 0.7),
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
-        debugLog: parseBool(getInputValue('agent_debug_log'), true),
+        debugLog: parseBool(getInputValue('agents_debug_log'), true),
         pipeline: normalizePipelineConfig(pipeline, normalizedPresets, initialConf),
         modelPresets: normalizedPresets,
         providerKeys: normalizedKeys,
@@ -2344,25 +2345,25 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     }
 
     async function saveLiteConfig(conf) {
-      await Risuai.setArgument('agent_provider', conf.provider);
-      await Risuai.setArgument('agent_base_url', conf.baseUrl);
-      await Risuai.setArgument('agent_api_key', '');
-      await Risuai.setArgument('agent_model', conf.model);
-      await Risuai.setArgument('agent_temperature', String(conf.temperature));
-      await Risuai.setArgument('agent_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
-      await Risuai.setArgument('context_window', String(conf.window));
-      await Risuai.setArgument('agent_debug_log', String(conf.debugLog));
-      await Risuai.setArgument('agent_pipeline_json', JSON.stringify(conf.pipeline));
-      await Risuai.setArgument('agent_model_presets_json', JSON.stringify(conf.modelPresets));
-      await Risuai.setArgument('agent_provider_keys_json', JSON.stringify(conf.providerKeys));
+      await Risuai.setArgument('agents_provider', conf.provider);
+      await Risuai.setArgument('agents_base_url', conf.baseUrl);
+      await Risuai.setArgument('agents_api_key', '');
+      await Risuai.setArgument('agents_model', conf.model);
+      await Risuai.setArgument('agents_temperature', String(conf.temperature));
+      await Risuai.setArgument('agents_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
+      await Risuai.setArgument('agents_context_window', String(conf.window));
+      await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
+      await Risuai.setArgument('agents_pipeline_json', JSON.stringify(conf.pipeline));
+      await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
+      await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
     }
 
     async function testLiteLlm() {
       const conf = {
-        provider: getProviderValue('agent_provider', DEFAULT_AGENT_PROVIDER),
-        baseUrl: normalizeUrl(getInputValue('agent_base_url') || DEFAULT_AGENT_BASE_URL),
-        apiKey: getCredentialValue('agent_api_key') || (await Risuai.getArgument('agent_api_key')) || '',
-        model: getInputValue('agent_model') || DEFAULT_AGENT_MODEL,
+        provider: getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER),
+        baseUrl: normalizeUrl(getInputValue('agents_base_url') || DEFAULT_AGENT_BASE_URL),
+        apiKey: getCredentialValue('agents_api_key') || (await Risuai.getArgument('agents_api_key')) || '',
+        model: getInputValue('agents_model') || DEFAULT_AGENT_MODEL,
       };
 
       if (!conf.apiKey) {
@@ -2471,7 +2472,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     }
 
     function getCredentialValue(id) {
-      if (isVertexProvider(getProviderValue('agent_provider', DEFAULT_AGENT_PROVIDER))) {
+      if (isVertexProvider(getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER))) {
         return document.getElementById(`${id}_json`)?.value?.trim() || getInputValue(id);
       }
       return getInputValue(id);
@@ -2562,10 +2563,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           const id = select.dataset.providerSelect;
           const wrapper = document.querySelector(`[data-provider="${id}"]`);
           wrapper?.classList.toggle('provider-custom-active', select.value === 'custom');
-          const credential = document.querySelector('[data-credential="agent_api_key"]');
+          const credential = document.querySelector('[data-credential="agents_api_key"]');
           credential?.classList.toggle('credential-vertex-active', select.value === 'vertex-ai');
           applyProviderDefaults(select.value);
-          updateEndpointExample('agent_base_url');
+          updateEndpointExample('agents_base_url');
         };
         select.addEventListener('change', update);
         update();
@@ -2577,11 +2578,11 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       const defaults = providerDefaults(provider);
       if (!defaults) return;
 
-      const baseInput = document.getElementById('agent_base_url');
-      const modelInput = document.getElementById('agent_model');
+      const baseInput = document.getElementById('agents_base_url');
+      const modelInput = document.getElementById('agents_model');
       if (baseInput && shouldReplaceEndpoint(baseInput.value)) {
         baseInput.value = defaults.baseUrl;
-        updateEndpointExample('agent_base_url');
+        updateEndpointExample('agents_base_url');
       }
       if (modelInput && shouldReplaceModel(modelInput.value)) {
         modelInput.value = defaults.model;
@@ -2622,7 +2623,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       const input = document.getElementById(baseId);
       if (!example || !input) return;
       example.textContent = `예시 URL: ${exampleApiUrl({
-        provider: getProviderValue('agent_provider', DEFAULT_AGENT_PROVIDER),
+        provider: getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER),
         baseUrl: input.value || DEFAULT_AGENT_BASE_URL,
       })}`;
     }
@@ -2819,7 +2820,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         info.temperature = payload.temperature;
         info.max_tokens = payload.max_tokens;
       }
-      console.log(`MultiAgent fetch: ${label}`, info);
+      console.log(`Agents! fetch: ${label}`, info);
     }
 
     function logPromptFlow(label, messages, full = false) {
@@ -2855,8 +2856,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     }
 
     function logSettingBlockStats(stats) {
-      if (console.groupCollapsed) console.groupCollapsed('MultiAgent debug: setting block stats');
-      else console.log('MultiAgent debug: setting block stats');
+      if (console.groupCollapsed) console.groupCollapsed('Agents! debug: setting block stats');
+      else console.log('Agents! debug: setting block stats');
       console.log(`character: ${stats.character}`);
       console.log(`persona: ${stats.persona}`);
       console.log(`authorNote: ${stats.authorNote}`);
@@ -2874,7 +2875,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const runScope = await getAgentMemoryScope(conf.debugLog);
 
         if (!hasUsableProviderKeyForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
-          console.log('MultiAgent: provider API key not set — pre-agent pipeline skipped');
+          console.log('Agents!: provider API key not set — pre-agent pipeline skipped');
           lastPipelineRun = createRunLogBase(type, pipeline, conf, runScope, 'skipped', 'pre-agent provider API key not set');
           lastPipelineRun.userInput = getUserInput(messages);
           await persistRunLog(lastPipelineRun, conf.debugLog);
@@ -2884,22 +2885,22 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const settingBlocks = await buildSettingBlocks(messages);
 
         if (conf.debugLog) {
-          console.log('MultiAgent debug: beforeRequest type =', type);
-          logPromptFlow('MultiAgent debug: RisuAI original messages', messages, true);
-          logTextBlock('MultiAgent debug: setting blocks passed to agents', settingBlocks.content);
+          console.log('Agents! debug: beforeRequest type =', type);
+          logPromptFlow('Agents! debug: RisuAI original messages', messages, true);
+          logTextBlock('Agents! debug: setting blocks passed to agents', settingBlocks.content);
           logSettingBlockStats(settingBlocks.stats);
-          logTextBlock('MultiAgent debug: current user input passed to agents', getUserInput(messages));
+          logTextBlock('Agents! debug: current user input passed to agents', getUserInput(messages));
         }
 
         const notes = await runPrePipeline(messages, conf, pipeline, settingBlocks, type, runScope);
         const injectedMessages = injectAgentNotes(messages, notes);
         await persistRunLog(lastPipelineRun, conf.debugLog);
-        if (conf.debugLog) logPromptFlow('MultiAgent debug: messages sent to main LLM after injection', injectedMessages, true);
+        if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
         return injectedMessages;
 
       } catch (err) {
         // 에러 시 원본 메시지 그대로 통과 (파이프라인 실패가 채팅을 막지 않도록)
-        console.log(`MultiAgent pipeline error: ${err.message}`);
+        console.log(`Agents! pipeline error: ${err.message}`);
         lastPipelineRun = null;
         return messages;
       }
@@ -2923,7 +2924,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         }
 
         if (!hasUsableProviderKeyForRows(pipeline, conf, MAIN_ROW_INDEX + 1, PIPELINE_ROW_COUNT - 1)) {
-          console.log('MultiAgent: provider API key not set — post-agent pipeline skipped');
+          console.log('Agents!: provider API key not set — post-agent pipeline skipped');
           if (lastPipelineRun) {
             lastPipelineRun.status = 'post-skipped';
             lastPipelineRun.reason = 'post-agent provider API key not set';
@@ -2934,16 +2935,16 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         }
 
         if (conf.debugLog) {
-          console.log('MultiAgent debug: afterRequest type =', type);
-          logTextBlock('MultiAgent debug: main model response before post-agents', content);
+          console.log('Agents! debug: afterRequest type =', type);
+          logTextBlock('Agents! debug: main model response before post-agents', content);
         }
 
         const finalContent = await runPostPipeline(content, conf, pipeline, type);
         await persistRunLog(lastPipelineRun, conf.debugLog);
-        if (conf.debugLog) logTextBlock('MultiAgent debug: final response after post-agents', finalContent);
+        if (conf.debugLog) logTextBlock('Agents! debug: final response after post-agents', finalContent);
         return finalContent;
       } catch (err) {
-        console.log(`MultiAgent afterRequest pipeline error: ${err.message}`);
+        console.log(`Agents! afterRequest pipeline error: ${err.message}`);
         return content;
       }
     });
@@ -2951,6 +2952,6 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     console.log('Agents! v1.0.0 loaded');
 
   } catch (err) {
-    console.log(`MultiAgent init error: ${err.message}`);
+    console.log(`Agents! init error: ${err.message}`);
   }
 })();
