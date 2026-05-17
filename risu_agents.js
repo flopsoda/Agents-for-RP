@@ -39,7 +39,7 @@
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
-    const MEMORY_STACK_VERSION = 3;
+    const MEMORY_STACK_VERSION = 4;
     const RUN_LOG_VERSION = 1;
     const PRE_REUSE_VERSION = 1;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
@@ -1223,9 +1223,20 @@
       return text.length <= 22 ? text : `${text.slice(0, 12)}...${text.slice(-6)}`;
     }
 
-    function agentMemoryKey(agent, scope) {
+    function agentMemoryBaseKey(agent, scope) {
       if (!scope?.chatKey) return '';
-      return `${'risu_agents_' + 'memory:'}${scope?.characterId || 'unknown-character'}:${scope.chatKey}:${sanitizeMemoryKeyPart(agent.id)}`;
+      return `${'risu_agents_' + 'memory_v4:'}${scope?.characterId || 'unknown-character'}:${scope.chatKey}:${sanitizeMemoryKeyPart(agent.id)}`;
+    }
+
+    function agentMemoryKey(agent, scope) {
+      const baseKey = agentMemoryBaseKey(agent, scope);
+      return baseKey ? `${baseKey}:index` : '';
+    }
+
+    function agentMemorySnapshotKey(indexKey, messageCount) {
+      const baseKey = String(indexKey || '').replace(/:index$/, '');
+      if (!baseKey) return '';
+      return `${baseKey}:snapshot:${sanitizeMemoryKeyPart(messageCount)}`;
     }
 
     function agentRunLogKey(scope) {
@@ -1264,17 +1275,18 @@
     }
 
     function normalizeMemorySnapshot(snapshot, fallbackState = null) {
-      const value = String(snapshot?.value || '').trim();
-      if (!value) return null;
+      if (!snapshot || typeof snapshot !== 'object') return null;
       const state = fallbackState || {};
       const messageCount = Number.isFinite(Number(snapshot?.messageCount))
         ? Math.max(0, parseInt(snapshot.messageCount, 10) || 0)
         : Number.isFinite(Number(state.messageCount))
           ? Math.max(0, parseInt(state.messageCount, 10) || 0)
           : 0;
+      const snapshotKey = String(snapshot?.snapshotKey || state.snapshotKey || '').trim();
+      if (!snapshotKey) return null;
       return {
         messageCount,
-        value,
+        snapshotKey,
         updatedAt: Number(snapshot?.updatedAt) || Date.now(),
         usedAt: Number(snapshot?.usedAt) || Number(snapshot?.updatedAt) || Date.now(),
         preview: String(snapshot?.preview || state.preview || '대화 시작 전'),
@@ -1313,25 +1325,7 @@
         };
       }
 
-      const legacyValue = raw && typeof raw === 'object' && raw !== null
-        ? String(raw.value || '').trim()
-        : String(raw || '').trim();
-      if (!legacyValue) return base;
-
-      const baselineState = memoryStateForMessages([], 0);
-      const snapshot = normalizeMemorySnapshot({
-        value: legacyValue,
-        updatedAt: raw?.updatedAt,
-        usedAt: raw?.updatedAt,
-      }, {
-        ...baselineState,
-        preview: '기존 단일 기억에서 승격됨',
-      });
-      return {
-        ...base,
-        pointer: 0,
-        snapshots: snapshot ? [snapshot] : [],
-      };
+      return base;
     }
 
     function compactMemorySnapshots(sourceSnapshots, preferredPointer = -1) {
@@ -1392,6 +1386,20 @@
       return Number.isFinite(pointer) && pointer >= 0 ? snapshots[pointer] || null : null;
     }
 
+    async function loadMemorySnapshotValue(snapshot, debugLog) {
+      if (!snapshot?.snapshotKey) return '';
+      try {
+        const raw = await Risuai.pluginStorage.getItem(snapshot.snapshotKey);
+        const value = raw && typeof raw === 'object' && raw !== null
+          ? String(raw.value || '').trim()
+          : String(raw || '').trim();
+        return value;
+      } catch (err) {
+        if (debugLog) console.log(`Agents! memory snapshot load failed: ${err.message}`);
+        return '';
+      }
+    }
+
     async function persistMemoryStore(key, store, debugLog) {
       try {
         await Risuai.pluginStorage.setItem(key, store);
@@ -1444,7 +1452,7 @@
         }
 
         const snapshot = currentMemorySnapshot(store);
-        const value = String(snapshot?.value || '').trim();
+        const value = await loadMemorySnapshotValue(snapshot, debugLog);
         if (debugLog) console.log(`Agents! memory loaded (${agent.name}): ${value ? 'found' : 'empty'} ${key}`);
         return {
           enabled: true,
@@ -1501,7 +1509,7 @@
         const raw = await Risuai.pluginStorage.getItem(key);
         const store = normalizeMemoryStore(raw, agent, scope || {});
         const snapshot = currentMemorySnapshot(store);
-        const value = String(snapshot?.value || '').trim();
+        const value = await loadMemorySnapshotValue(snapshot, debugLog);
         if (debugLog) console.log(`Agents! memory read-only (${agent.name}): ${value ? 'found' : 'empty'} ${key}; ${reason}`);
         return {
           enabled: true,
@@ -1551,10 +1559,12 @@
         const store = normalizeMemoryStore(memory.store, agent, memory);
         const state = memory.currentState || memoryStateForMessages([]);
         const now = Date.now();
+        const snapshotKey = agentMemorySnapshotKey(memory.key, state.messageCount);
+        if (!snapshotKey) return false;
         const snapshot = {
           messageCount: state.messageCount,
           preview: state.preview,
-          value: nextMemory,
+          snapshotKey,
           updatedAt: now,
           usedAt: now,
         };
@@ -1584,6 +1594,12 @@
         store.chatIndex = memory.chatIndex;
         store.chatKey = memory.chatKey || '';
         store.updatedAt = now;
+        await Risuai.pluginStorage.setItem(snapshotKey, {
+          version: MEMORY_STACK_VERSION,
+          messageCount: state.messageCount,
+          value: nextMemory,
+          updatedAt: now,
+        });
         await Risuai.pluginStorage.setItem(memory.key, {
           ...store,
           updatedAt: Date.now(),
@@ -2535,6 +2551,17 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       document.getElementById('memory-stack-modal')?.addEventListener('click', (event) => {
         if (event.target?.id === 'memory-stack-modal') closeMemoryStackModal();
       });
+      document.querySelectorAll('[data-memory-snapshot-key]').forEach(button => {
+        button.addEventListener('click', async (event) => {
+          const key = event.currentTarget.getAttribute('data-memory-snapshot-key');
+          const targetId = event.currentTarget.getAttribute('data-memory-snapshot-target');
+          const target = targetId ? document.getElementById(targetId) : null;
+          if (!key || !target) return;
+          target.innerHTML = '<div class="metric-sub">기억 내용을 불러오는 중...</div>';
+          const value = await loadMemorySnapshotValue({ snapshotKey: key }, conf?.debugLog);
+          target.innerHTML = detailBlockHtml('기억 내용', value || EMPTY_AGENT_MEMORY);
+        });
+      });
     }
 
     function closeMemoryStackModal() {
@@ -2552,7 +2579,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       const content = error
         ? `<div class="empty">기억을 불러오지 못했습니다: ${escHtml(error)}</div>`
         : list.length
-          ? `<div class="memory-stack">${list.map(item => memorySnapshotHtml(item.snapshot, item.latest)).join('')}</div>`
+          ? `<div class="memory-stack">${list.map((item, idx) => memorySnapshotHtml(item.snapshot, item.latest, idx)).join('')}</div>`
           : '<div class="empty">현재 채팅방에 저장된 기억이 없습니다.</div>';
 
       return `<div id="memory-stack-modal" class="modal-backdrop">
@@ -2572,20 +2599,24 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       </div>`;
     }
 
-    function memorySnapshotHtml(snapshot, isLatest) {
+    function memorySnapshotHtml(snapshot, isLatest, idx = 0) {
       const label = `대화 ${snapshot.messageCount ?? 0}개 시점`;
       const updatedAt = formatInspectorTime(snapshot.updatedAt);
       const usedAt = formatInspectorTime(snapshot.usedAt);
+      const bodyId = `memory-snapshot-body-${idx}`;
       return `<div class="memory-snapshot${isLatest ? ' current' : ''}">
         <div class="memory-snapshot-head">
           <div>
             <div class="memory-snapshot-title">${escHtml(label)}</div>
             <div class="memory-snapshot-meta">실제 대화 메시지 ${escHtml(snapshot.messageCount ?? 0)}개</div>
           </div>
-          <div class="memory-snapshot-meta">사용 ${escHtml(usedAt)} · 갱신 ${escHtml(updatedAt)}</div>
+          <div>
+            <div class="memory-snapshot-meta">사용 ${escHtml(usedAt)} · 갱신 ${escHtml(updatedAt)}</div>
+            <button class="ghost" data-memory-snapshot-key="${escHtml(snapshot.snapshotKey || '')}" data-memory-snapshot-target="${escHtml(bodyId)}">보기</button>
+          </div>
         </div>
         ${snapshot.preview ? `<div class="metric-sub">스냅샷 기준 최근 대화: ${escHtml(snapshot.preview)}</div>` : ''}
-        <div class="detail-block"><h3>기억 내용</h3><pre>${escHtml(snapshot.value || EMPTY_AGENT_MEMORY)}</pre></div>
+        <div id="${escHtml(bodyId)}"></div>
       </div>`;
     }
 
