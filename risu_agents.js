@@ -2617,6 +2617,13 @@ h1{font-size:1.34rem;font-weight:720;letter-spacing:0;margin-bottom:4px}
 .card{background:#191b20;border:1px solid #292d35;border-radius:8px;padding:14px;margin-bottom:12px}
 .card h2{font-size:.91rem;margin-bottom:10px;color:#f2f4f7}
 .card p{font-size:.82rem;color:#a8b0bd}
+.collapsible-card summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
+.collapsible-card summary::-webkit-details-marker{display:none}
+.collapsible-card summary h2{margin-bottom:0}
+.collapsible-card .collapse-state{font-size:.74rem;color:#9aa4b2}
+.collapsible-card .collapse-state::before{content:"펼치기"}
+.collapsible-card[open] .collapse-state::before{content:"접기"}
+.collapsible-body{margin-top:10px}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 8px;font-size:.8rem}
 .k{color:#8792a2}.v{color:#dde3ec;overflow-wrap:anywhere}
 .field{margin-bottom:10px}
@@ -2697,9 +2704,9 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     </div>
   </div>
 
-  <div class="card">
-    <h2>Model Presets</h2>
-    <div class="preset-shell">
+  <details class="card collapsible-card">
+    <summary><h2>Model Presets</h2><span class="collapse-state"></span></summary>
+    <div class="collapsible-body preset-shell">
       <div>
         <div id="preset-list" class="preset-list"></div>
         <div class="mini-actions">
@@ -2708,23 +2715,23 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       </div>
       <div id="preset-editor"></div>
     </div>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Provider API Keys</h2>
-    <div id="provider-key-editor"></div>
-  </div>
+  <details class="card collapsible-card">
+    <summary><h2>Provider API Keys</h2><span class="collapse-state"></span></summary>
+    <div id="provider-key-editor" class="collapsible-body"></div>
+  </details>
 
-  <div class="card">
-    <h2>공통 설정</h2>
-    <div class="field">
+  <details class="card collapsible-card">
+    <summary><h2>공통 설정</h2><span class="collapse-state"></span></summary>
+    <div class="collapsible-body field">
       <label for="agents_debug_log">Debug Log</label>
       <select id="agents_debug_log">
         <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
         <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
       </select>
     </div>
-  </div>
+  </details>
 
   <div id="test-results" class="preset-test-results"></div>
 </div>
