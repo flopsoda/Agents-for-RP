@@ -1114,10 +1114,20 @@
 
     // ── 동적 파이프라인 ───────────────────────────────────────────────────────
 
+    const PIPELINE_CONFIG_VERSION = 2;
+    const POST_MODE_POLISH = 'polish';
+    const POST_MODE_PREFIX = 'prefix';
+    const POST_MODE_SUFFIX = 'suffix';
+    const POST_MODES = [POST_MODE_POLISH, POST_MODE_PREFIX, POST_MODE_SUFFIX];
     const DEFAULT_OUTPUT_PRE =
       '간결한 불릿 포인트 메모만 작성하세요. 최종 RP 응답은 작성하지 마세요.';
-    const DEFAULT_OUTPUT_POST =
+    const DEFAULT_OUTPUT_POST_POLISH =
       '메인 모델 응답을 수정한 최종 사용자 응답만 출력하세요. 분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.';
+    const DEFAULT_OUTPUT_POST_PREFIX =
+      '현재 응답 앞에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
+    const DEFAULT_OUTPUT_POST_SUFFIX =
+      '현재 응답 뒤에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
+    const DEFAULT_OUTPUT_POST = DEFAULT_OUTPUT_POST_POLISH;
 
     const DEFAULT_AGENT_PRESETS = [
       {
@@ -1212,11 +1222,24 @@
           '[짧은 어조 샘플]\n' +
           '- 이름: 1문장 이하의 참고용 샘플. 장면을 진행하는 완성 대사가 아니라 어조 참고용으로만 작성',
       },
+      {
+        id: 'agent-final-polish',
+        row: MAIN_ROW_INDEX + 1,
+        column: 0,
+        name: '최종 다듬기 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        postMode: POST_MODE_POLISH,
+        systemPrompt:
+          '당신은 RP 응답 최종 다듬기 에이전트입니다.\n' +
+          '메인 모델 응답을 설정, pre-agent 노트, 현재 문맥에 맞게 자연스럽게 검수하고 다듬으세요.\n' +
+          '캐릭터 말투, 세계관, 장면 흐름을 보존하면서 어색한 문장, 중복, OOC 가능성만 조용히 수정하세요.',
+        outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
+      },
     ];
 
     function createEmptyPipeline() {
       return {
-        version: 1,
+        version: PIPELINE_CONFIG_VERSION,
         rows: Array.from({ length: PIPELINE_ROW_COUNT }, (_, row) => ({
           row,
           label: row === MAIN_ROW_INDEX ? 'Main Model' : `Row ${row + 1}`,
@@ -1236,6 +1259,7 @@
     function normalizePipelineConfig(raw, modelPresets = null) {
       const fallback = createEmptyPipeline();
       const sourceRows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
+      const sourceVersion = normalizePipelineVersion(raw);
 
       for (let row = 0; row < PIPELINE_ROW_COUNT; row += 1) {
         const sourceRow = sourceRows.find(r => Number(r?.row) === row) || sourceRows[row] || {};
@@ -1251,6 +1275,11 @@
         });
       }
 
+      if (sourceVersion < PIPELINE_CONFIG_VERSION && !hasAnyPostAgent(fallback)) {
+        addDefaultPostAgent(fallback, modelPresets);
+      }
+
+      fallback.version = PIPELINE_CONFIG_VERSION;
       return fallback;
     }
 
@@ -1269,6 +1298,7 @@
     function normalizeAgent(agent, row, column, modelPresets = null) {
       const mode = row < MAIN_ROW_INDEX ? 'pre' : 'post';
       const modelPresetId = resolveAgentPresetId(agent, modelPresets);
+      const postMode = mode === 'post' ? normalizePostMode(agent?.postMode) : POST_MODE_POLISH;
       return {
         id: String(agent?.id || makeAgentId(mode)),
         name: String(agent?.name || (mode === 'pre' ? '새 노트 에이전트' : '새 후처리 에이전트')),
@@ -1277,8 +1307,9 @@
         row,
         column: Number.isFinite(Number(agent?.column)) ? Number(agent.column) : column,
         systemPrompt: String(agent?.systemPrompt || defaultSystemPromptForMode(mode)),
-        outputInstruction: String(agent?.outputInstruction || (mode === 'pre' ? DEFAULT_OUTPUT_PRE : DEFAULT_OUTPUT_POST)),
+        outputInstruction: String(agent?.outputInstruction || (mode === 'pre' ? DEFAULT_OUTPUT_PRE : defaultOutputInstructionForPostMode(postMode))),
         modelPresetId,
+        ...(mode === 'post' ? { postMode } : {}),
         includeSettingBlocks: agent?.includeSettingBlocks !== undefined
           ? agent.includeSettingBlocks !== false
           : agent?.includeCuratedContext !== false,
@@ -1289,6 +1320,78 @@
         memoryInstruction: String(agent?.memoryInstruction || ''),
         memoryFormat: String(agent?.memoryFormat || ''),
       };
+    }
+
+    function normalizePipelineVersion(raw) {
+      const version = Number(raw?.version);
+      return Number.isFinite(version) && version > 0 ? version : 1;
+    }
+
+    function hasAnyPostAgent(pipeline) {
+      for (let row = MAIN_ROW_INDEX + 1; row < PIPELINE_ROW_COUNT; row += 1) {
+        if ((pipeline.rows[row]?.agents || []).length > 0) return true;
+      }
+      return false;
+    }
+
+    function addDefaultPostAgent(pipeline, modelPresets = null) {
+      const row = MAIN_ROW_INDEX + 1;
+      if (!pipeline.rows[row]) return;
+      pipeline.rows[row].agents = [
+        normalizeAgent(defaultPostAgentPreset(), row, 0, modelPresets),
+      ];
+    }
+
+    function defaultPostAgentPreset() {
+      return DEFAULT_AGENT_PRESETS.find(agent => agent.id === 'agent-final-polish') || {
+        id: 'agent-final-polish',
+        row: MAIN_ROW_INDEX + 1,
+        column: 0,
+        name: '최종 다듬기 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        postMode: POST_MODE_POLISH,
+        systemPrompt: defaultSystemPromptForMode('post'),
+        outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
+      };
+    }
+
+    function normalizePostMode(value) {
+      const mode = String(value || POST_MODE_POLISH);
+      return POST_MODES.includes(mode) ? mode : POST_MODE_POLISH;
+    }
+
+    function defaultOutputInstructionForPostMode(postMode) {
+      switch (normalizePostMode(postMode)) {
+        case POST_MODE_PREFIX:
+          return DEFAULT_OUTPUT_POST_PREFIX;
+        case POST_MODE_SUFFIX:
+          return DEFAULT_OUTPUT_POST_SUFFIX;
+        case POST_MODE_POLISH:
+        default:
+          return DEFAULT_OUTPUT_POST_POLISH;
+      }
+    }
+
+    function isDefaultPostOutputInstruction(value) {
+      const text = String(value || '').trim();
+      return !text || [
+        DEFAULT_OUTPUT_POST_POLISH,
+        DEFAULT_OUTPUT_POST_PREFIX,
+        DEFAULT_OUTPUT_POST_SUFFIX,
+        DEFAULT_OUTPUT_POST,
+      ].some(item => text === item);
+    }
+
+    function postModeLabel(postMode) {
+      switch (normalizePostMode(postMode)) {
+        case POST_MODE_PREFIX:
+          return '앞에 추가';
+        case POST_MODE_SUFFIX:
+          return '뒤에 추가';
+        case POST_MODE_POLISH:
+        default:
+          return '전체 다듬기';
+      }
     }
 
     function resolveAgentPresetId(agent, modelPresets) {
@@ -1396,7 +1499,7 @@
         agent.systemPrompt,
         '',
         agent.mode === 'post'
-          ? '반드시 최종 사용자에게 보여줄 수정 응답만 출력하세요. 분석 메모, 설명, 변경 목록을 출력하지 마세요.'
+          ? postModeOutputContract(agent.postMode)
           : '최종 RP 응답은 작성하지 말고 보조 메모만 작성하세요.',
         agent.mode === 'pre' && agent.memoryEnabled ? `\n${memoryOutputContract(agent)}` : '',
       ].join('\n');
@@ -1405,6 +1508,26 @@
         { role: 'system', content: systemContent },
         { role: 'user', content: sections.join('\n\n') },
       ];
+    }
+
+    function postModeOutputContract(postMode) {
+      switch (normalizePostMode(postMode)) {
+        case POST_MODE_PREFIX:
+          return [
+            '반드시 현재 응답 앞에 붙일 추가 텍스트 조각만 출력하세요.',
+            '현재 응답 본문을 반복하거나 다시 쓰지 마세요.',
+            '분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.',
+          ].join('\n');
+        case POST_MODE_SUFFIX:
+          return [
+            '반드시 현재 응답 뒤에 붙일 추가 텍스트 조각만 출력하세요.',
+            '현재 응답 본문을 반복하거나 다시 쓰지 마세요.',
+            '분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.',
+          ].join('\n');
+        case POST_MODE_POLISH:
+        default:
+          return '반드시 최종 사용자에게 보여줄 수정 응답 전체만 출력하세요. 분석 메모, 설명, 변경 목록을 출력하지 마세요.';
+      }
     }
 
     function formatAgentNotes(notes, emptyText) {
@@ -1977,6 +2100,7 @@
         memoryEnabled: agent.mode === 'pre' && agent.memoryEnabled === true,
         memoryInstruction: agent.mode === 'pre' ? agent.memoryInstruction || '' : '',
         memoryFormat: agent.mode === 'pre' ? agent.memoryFormat || '' : '',
+        postMode: agent.mode === 'post' ? normalizePostMode(agent.postMode) : '',
       };
     }
 
@@ -2649,15 +2773,16 @@
         if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
 
         try {
-          const nextResponse = String(await callAgent(agentConf, prompt) || '').trim();
-          if (nextResponse) {
+          const rawOutput = String(await callAgent(agentConf, prompt) || '').trim();
+          if (rawOutput) {
+            const nextResponse = applyPostAgentOutput(agent, currentResponse, rawOutput);
             if (keepRunDetails) {
               postResults.push({
                 ...runAgentMeta(agent, conf),
                 status: 'success',
                 inputResponse: currentResponse,
                 outputResponse: nextResponse,
-                rawOutput: nextResponse,
+                rawOutput,
               });
             }
             currentResponse = nextResponse;
@@ -2696,6 +2821,28 @@
       }
 
       return currentResponse;
+    }
+
+    function applyPostAgentOutput(agent, currentResponse, rawOutput) {
+      const current = String(currentResponse ?? '');
+      const output = String(rawOutput ?? '').trim();
+      switch (normalizePostMode(agent?.postMode)) {
+        case POST_MODE_PREFIX:
+          return joinResponseParts(output, current);
+        case POST_MODE_SUFFIX:
+          return joinResponseParts(current, output);
+        case POST_MODE_POLISH:
+        default:
+          return output;
+      }
+    }
+
+    function joinResponseParts(first, second) {
+      const left = String(first ?? '').trim();
+      const right = String(second ?? '').trim();
+      if (!left) return right;
+      if (!right) return left;
+      return `${left}\n\n${right}`;
     }
 
     // ── 컨텍스트 주입 ─────────────────────────────────────────────────────────
@@ -2916,9 +3063,10 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
         const status = result ? resultStatusLabel(result.status) : '결과 없음';
         const reused = result?.reused ? ' · 재사용됨' : '';
+        const postMode = agent.mode === 'post' ? ` · ${postModeLabel(result?.postMode || agent.postMode)}` : '';
         return `<div class="agent-card${selected}${disabled} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(preset.name || preset.model || 'model preset')} · ${escHtml(status)}${escHtml(memory)}${escHtml(reused)}</div>
+          <div class="agent-meta">${escHtml(preset.name || preset.model || 'model preset')} · ${escHtml(status)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
         </div>`;
       }
 
@@ -3034,6 +3182,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       const meta = `<div class="detail-meta">
         <span class="badge neutral">Row ${escHtml(agent.row + 1)}</span>
         <span class="badge neutral">${escHtml(modeLabel)}</span>
+        ${agent.mode === 'post' ? `<span class="badge neutral">${escHtml(postModeLabel(result?.postMode || agent.postMode))}</span>` : ''}
         ${resultBadge}
         ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
@@ -3047,7 +3196,8 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       if (agent.mode === 'post') {
         return `<h2>${escHtml(agent.name)}</h2>${meta}
           ${runLogDetailBlockHtml('입력 응답', result, 'inputResponse', '(입력 응답 없음)')}
-          ${runLogDetailBlockHtml('수정 후 응답', result, 'outputResponse', '(수정 후 응답 없음)')}
+          ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
+          ${runLogDetailBlockHtml('적용 후 응답', result, 'outputResponse', '(적용 후 응답 없음)')}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
 
@@ -3430,9 +3580,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const model = preset.name || preset.model || 'model preset';
         const context = preset.contextWindow || 'ctx';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
+        const postMode = agent.mode === 'post' ? ` · ${postModeLabel(agent.postMode)}` : '';
         return `<div class="agent-card${selected}${disabled}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(model)} · ${escHtml(context)}${escHtml(memory)}</div>
+          <div class="agent-meta">${escHtml(model)} · ${escHtml(context)}${escHtml(memory)}${escHtml(postMode)}</div>
         </div>`;
       }
 
@@ -3452,11 +3603,15 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
                <div class="field"><label for="edit_memoryFormat">기억 포맷</label><textarea id="edit_memoryFormat" placeholder="예: 이름만 쉼표로 구분해 작성하세요. 예: 하유희, 민수, 민지">${escHtml(agent.memoryFormat)}</textarea></div>
              </div>` : ''}`
           : '';
+        const postModeEditor = agent.mode === 'post'
+          ? `<div class="field"><label for="edit_postMode">후처리 방식</label>${postModeSelect('edit_postMode', agent.postMode)}</div>`
+          : '';
 
         root.innerHTML = `<h2>Agent Editor</h2>
           <div class="field"><label for="edit_name">Name</label><input id="edit_name" type="text" value="${escHtml(agent.name)}"></div>
           <label class="checkline"><input id="edit_enabled" type="checkbox" ${agent.enabled ? 'checked' : ''}> 활성화</label>
           <div class="field"><label for="edit_modelPresetId">Model Preset</label>${modelPresetSelect('edit_modelPresetId', agent.modelPresetId, modelPresetsState)}</div>
+          ${postModeEditor}
           <div class="field"><label for="edit_systemPrompt">System Prompt</label><textarea id="edit_systemPrompt">${escHtml(agent.systemPrompt)}</textarea></div>
           <div class="field"><label for="edit_outputInstruction">Output Instruction</label><textarea id="edit_outputInstruction">${escHtml(agent.outputInstruction)}</textarea></div>
           <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함</label>
@@ -3486,6 +3641,16 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         document.getElementById('edit_modelPresetId')?.addEventListener('change', (event) => {
           agent.modelPresetId = event.target.value;
           renderPipeline();
+        });
+
+        document.getElementById('edit_postMode')?.addEventListener('change', (event) => {
+          const previousInstruction = agent.outputInstruction;
+          agent.postMode = normalizePostMode(event.target.value);
+          if (isDefaultPostOutputInstruction(previousInstruction)) {
+            agent.outputInstruction = defaultOutputInstructionForPostMode(agent.postMode);
+          }
+          renderPipeline();
+          renderAgentEditor();
         });
 
         ['enabled', 'includeSettingBlocks', 'includeHistory', 'includeUserInput', 'includePreviousNotes'].forEach((field) => {
@@ -3560,12 +3725,13 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const systemMessage = promptMessages.find(message => message.role === 'system')?.content || '';
         const userMessage = promptMessages.find(message => message.role === 'user')?.content || '';
         const modeLabel = agent.mode === 'post' ? 'Post-Agent' : 'Pre-Agent';
+        const postModeText = agent.mode === 'post' ? ` · ${postModeLabel(agent.postMode)}` : '';
         return `<div id="prompt-preview-backdrop" class="modal-backdrop">
           <div class="prompt-modal" role="dialog" aria-modal="true" aria-label="프롬프트 확인">
             <div class="prompt-modal-head">
               <div>
                 <h2>프롬프트 확인</h2>
-                <div class="prompt-preview-meta">${escHtml(agent.name)} · Row ${escHtml(agent.row + 1)} · ${escHtml(modeLabel)} · ${escHtml(preset.name || preset.model)}</div>
+                <div class="prompt-preview-meta">${escHtml(agent.name)} · Row ${escHtml(agent.row + 1)} · ${escHtml(modeLabel)}${escHtml(postModeText)} · ${escHtml(preset.name || preset.model)}</div>
               </div>
               <button id="prompt-preview-close" class="ghost">닫기</button>
             </div>
@@ -3597,6 +3763,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           mode,
           systemPrompt: defaultSystemPromptForMode(mode),
           outputInstruction: mode === 'pre' ? DEFAULT_OUTPUT_PRE : DEFAULT_OUTPUT_POST,
+          postMode: POST_MODE_POLISH,
           modelPresetId: modelPresetsState[0]?.id || DEFAULT_MODEL_PRESET_ID,
         }, rowIndex, row.agents.length);
 
@@ -3861,6 +4028,15 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       return `<select id="${id}">${presets.map((preset) =>
         `<option value="${escHtml(preset.id)}" ${preset.id === selectedId ? 'selected' : ''}>${escHtml(preset.name)} - ${escHtml(preset.model)}</option>`
       ).join('')}</select>`;
+    }
+
+    function postModeSelect(id, selectedMode) {
+      const selected = normalizePostMode(selectedMode);
+      return `<select id="${id}">
+        <option value="${POST_MODE_POLISH}" ${selected === POST_MODE_POLISH ? 'selected' : ''}>전체 다듬기</option>
+        <option value="${POST_MODE_PREFIX}" ${selected === POST_MODE_PREFIX ? 'selected' : ''}>앞에 추가</option>
+        <option value="${POST_MODE_SUFFIX}" ${selected === POST_MODE_SUFFIX ? 'selected' : ''}>뒤에 추가</option>
+      </select>`;
     }
 
     function modelOptionsForProvider(provider) {
