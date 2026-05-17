@@ -10,6 +10,7 @@
 //@arg agents_max_tokens string Analysis agent max tokens (blank = provider default)
 //@arg agents_context_window int Recent messages per agent (default: 10)
 //@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: true)
+//@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: true)
 //@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
 //@arg agents_model_presets_json string Model presets JSON
 //@arg agents_provider_keys_json string Provider API keys JSON
@@ -72,6 +73,7 @@
       const maxTokens = parseOptionalInt(await Risuai.getArgument('agents_max_tokens'));
       const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
       const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), true);
+      const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), true);
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -104,6 +106,7 @@
         maxTokens,
         window,
         debugLog,
+        runLogEnabled,
       };
     }
 
@@ -1977,7 +1980,12 @@
       };
     }
 
+    function isRunLogEnabled(conf) {
+      return conf?.runLogEnabled !== false;
+    }
+
     function createRunLogBase(type, pipeline, conf, scope, status = 'running', reason = '') {
+      const keepRunDetails = isRunLogEnabled(conf);
       return {
         version: RUN_LOG_VERSION,
         type,
@@ -1993,7 +2001,9 @@
         characterName: scope?.characterName || '(알 수 없는 캐릭터)',
         chatName: scope?.chatName || `(알 수 없는 채팅방)`,
         runKey: agentRunLogKey(scope || {}),
-        pipelineSnapshot: JSON.parse(JSON.stringify(pipeline || createEmptyPipeline())),
+        pipelineSnapshot: keepRunDetails
+          ? JSON.parse(JSON.stringify(pipeline || createEmptyPipeline()))
+          : createEmptyPipeline(),
         preResults: [],
         postResults: [],
         notes: [],
@@ -2195,7 +2205,11 @@
       };
     }
 
-    async function persistRunLog(run, debugLog) {
+    async function persistRunLog(run, debugLog, runLogEnabled = true) {
+      if (runLogEnabled === false) {
+        if (debugLog) console.log('Agents! run log save skipped: run log disabled');
+        return false;
+      }
       if (!run?.runKey) {
         if (debugLog) console.log('Agents! run log save skipped: chat scope unavailable');
         return false;
@@ -2283,7 +2297,7 @@
       }
     }
 
-    async function loadCurrentRunLog(debugLog) {
+    async function loadCurrentRunLog(debugLog, runLogEnabled = true) {
       const scope = await getAgentMemoryScope(debugLog);
       const key = agentRunLogKey(scope);
       if (!key) {
@@ -2304,6 +2318,7 @@
           preResults: [],
           postResults: [],
           notes: [],
+          runLogEnabled,
         };
       }
       try {
@@ -2320,6 +2335,8 @@
             chatKeySource: scope.chatKeySource,
             chatScopeAvailable: true,
             chatScopeError: '',
+            runLogEnabled,
+            runLogStale: runLogEnabled === false,
           };
         }
         return {
@@ -2339,6 +2356,7 @@
           preResults: [],
           postResults: [],
           notes: [],
+          runLogEnabled,
         };
       } catch (err) {
         if (debugLog) console.log(`Agents! run log load failed: ${err.message}`);
@@ -2359,6 +2377,7 @@
           preResults: [],
           postResults: [],
           notes: [],
+          runLogEnabled,
         };
       }
     }
@@ -2374,23 +2393,26 @@
       const memoryUnavailableReason = chatContext?.available !== true
         ? chatContext?.error || 'chat-context-unavailable'
         : memoryScope?.chatScopeError || 'chat-scope-unavailable';
+      const keepRunDetails = isRunLogEnabled(conf);
       const notes = [];
       const userInput = getUserInput(contextMessages);
       const preResults = [];
 
       if (chatContext?.available !== true) {
         const skipText = `(스킵: 실제 채팅방 대화 컨텍스트 없음 - ${memoryUnavailableReason})`;
-        for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
-          const agents = getEnabledAgentsForRow(pipeline, row);
-          preResults.push(...agents.map(agent => ({
-            ...runAgentMeta(agent, conf),
-            content: skipText,
-            rawOutput: skipText,
-            status: 'skipped',
-            failed: true,
-            error: memoryUnavailableReason,
-            memoryStatus: agent.memoryEnabled ? 'chat-context-unavailable' : 'disabled',
-          })));
+        if (keepRunDetails) {
+          for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+            const agents = getEnabledAgentsForRow(pipeline, row);
+            preResults.push(...agents.map(agent => ({
+              ...runAgentMeta(agent, conf),
+              content: skipText,
+              rawOutput: skipText,
+              status: 'skipped',
+              failed: true,
+              error: memoryUnavailableReason,
+              memoryStatus: agent.memoryEnabled ? 'chat-context-unavailable' : 'disabled',
+            })));
+          }
         }
 
         lastPipelineRun = {
@@ -2408,7 +2430,7 @@
           characterName: runScope?.characterName || '(알 수 없는 캐릭터)',
           chatName: runScope?.chatName || '(알 수 없는 채팅방)',
           runKey: agentRunLogKey(runScope || {}),
-          pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
+          pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
           settingBlocks: settingBlocks.content,
           settingBlockStats: settingBlocks.stats,
           preReuseVersion: PRE_REUSE_VERSION,
@@ -2439,7 +2461,7 @@
             return {
               ...runAgentMeta(agent, conf),
               content,
-              rawOutput: content,
+              ...(keepRunDetails ? { rawOutput: content } : {}),
               status: 'skipped',
               failed: true,
               memoryStatus: agent.memoryEnabled ? 'skipped' : 'disabled',
@@ -2482,10 +2504,12 @@
                 return {
                   ...runAgentMeta(agent, conf),
                   content: parsed.note || content,
-                  rawOutput: content,
+                  ...(keepRunDetails ? {
+                    rawOutput: content,
+                    memoryPrevious: agentMemory.value || '',
+                    memoryUpdate: parsed.memoryUpdate,
+                  } : {}),
                   status: 'success',
-                  memoryPrevious: agentMemory.value || '',
-                  memoryUpdate: parsed.memoryUpdate,
                   memoryStatus,
                   memoryUpdated: Boolean(parsed.memoryUpdate && saved),
                   memoryStateKey: '',
@@ -2497,10 +2521,12 @@
               return {
                 ...runAgentMeta(agent, conf),
                 content,
-                rawOutput: content,
+                ...(keepRunDetails ? {
+                  rawOutput: content,
+                  memoryPrevious: agentMemory.value || '',
+                  memoryUpdate: '',
+                } : {}),
                 status: 'success',
-                memoryPrevious: agentMemory.value || '',
-                memoryUpdate: '',
                 memoryStatus: 'parse-failed',
                 memoryUpdated: false,
                 memoryStateKey: '',
@@ -2511,7 +2537,7 @@
             return {
               ...runAgentMeta(agent, conf),
               content,
-              rawOutput: content,
+              ...(keepRunDetails ? { rawOutput: content } : {}),
               status: 'success',
               memoryStatus: 'disabled',
             };
@@ -2521,7 +2547,7 @@
             return {
               ...runAgentMeta(agent, conf),
               content,
-              rawOutput: content,
+              ...(keepRunDetails ? { rawOutput: content } : {}),
               status: 'failed',
               failed: true,
               error: err.message,
@@ -2539,7 +2565,7 @@
           content: result.content,
           failed: result.failed,
         })));
-        preResults.push(...sortedResults);
+        if (keepRunDetails) preResults.push(...sortedResults);
       }
 
       lastPipelineRun = {
@@ -2557,7 +2583,7 @@
         characterName: runScope?.characterName || '(알 수 없는 캐릭터)',
         chatName: runScope?.chatName || '(알 수 없는 채팅방)',
         runKey: agentRunLogKey(runScope || {}),
-        pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
+        pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
         preReuseVersion: PRE_REUSE_VERSION,
@@ -2581,6 +2607,7 @@
 
     async function runPostPipeline(content, conf, pipeline, type) {
       let currentResponse = String(content ?? '');
+      const keepRunDetails = isRunLogEnabled(conf);
       const previousRun = lastPipelineRun || {
         type,
         postResults: [],
@@ -2601,14 +2628,16 @@
         const agentConf = resolveAgentConfig(agent, conf);
         if (!agentConf.apiKey) {
           console.log(`Agents! post-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
-          postResults.push({
-            ...runAgentMeta(agent, conf),
-            status: 'skipped',
-            failed: true,
-            inputResponse: currentResponse,
-            outputResponse: currentResponse,
-            error: `${agentConf.provider} provider API key 없음`,
-          });
+          if (keepRunDetails) {
+            postResults.push({
+              ...runAgentMeta(agent, conf),
+              status: 'skipped',
+              failed: true,
+              inputResponse: currentResponse,
+              outputResponse: currentResponse,
+              error: `${agentConf.provider} provider API key 없음`,
+            });
+          }
           continue;
         }
         const prompt = buildAgentPrompt(agent, {
@@ -2622,42 +2651,48 @@
         try {
           const nextResponse = String(await callAgent(agentConf, prompt) || '').trim();
           if (nextResponse) {
-            postResults.push({
-              ...runAgentMeta(agent, conf),
-              status: 'success',
-              inputResponse: currentResponse,
-              outputResponse: nextResponse,
-              rawOutput: nextResponse,
-            });
+            if (keepRunDetails) {
+              postResults.push({
+                ...runAgentMeta(agent, conf),
+                status: 'success',
+                inputResponse: currentResponse,
+                outputResponse: nextResponse,
+                rawOutput: nextResponse,
+              });
+            }
             currentResponse = nextResponse;
             if (conf.debugLog) logTextBlock(`Agents! debug: Row ${row + 1} ${agent.name} post-agent result`, currentResponse);
           } else {
             console.log(`Agents! post-agent returned empty response (${agent.name}); keeping previous response`);
-            postResults.push({
-              ...runAgentMeta(agent, conf),
-              status: 'empty',
-              inputResponse: currentResponse,
-              outputResponse: currentResponse,
-              rawOutput: '',
-            });
+            if (keepRunDetails) {
+              postResults.push({
+                ...runAgentMeta(agent, conf),
+                status: 'empty',
+                inputResponse: currentResponse,
+                outputResponse: currentResponse,
+                rawOutput: '',
+              });
+            }
           }
         } catch (err) {
           console.log(`Agents! post-agent failed (${agent.name}): ${err.message}`);
-          postResults.push({
-            ...runAgentMeta(agent, conf),
-            status: 'failed',
-            failed: true,
-            inputResponse: currentResponse,
-            outputResponse: currentResponse,
-            error: err.message,
-          });
+          if (keepRunDetails) {
+            postResults.push({
+              ...runAgentMeta(agent, conf),
+              status: 'failed',
+              failed: true,
+              inputResponse: currentResponse,
+              outputResponse: currentResponse,
+              error: err.message,
+            });
+          }
         }
       }
 
       if (lastPipelineRun) {
         lastPipelineRun.postResults = postResults;
         lastPipelineRun.status = lastPipelineRun.preReused ? 'pre-reused' : 'complete';
-        lastPipelineRun.finalResponse = currentResponse;
+        if (keepRunDetails) lastPipelineRun.finalResponse = currentResponse;
       }
 
       return currentResponse;
@@ -2704,7 +2739,7 @@
       console.log('Agents! opening run inspector');
       const conf = await getConfig();
       const pipeline = await getPipelineConfig(conf);
-      const runLog = await loadCurrentRunLog(conf.debugLog);
+      const runLog = await loadCurrentRunLog(conf.debugLog, conf.runLogEnabled);
       document.body.innerHTML = buildRunInspectorUI(pipeline, runLog);
       setupRunInspectorHandlers(conf, pipeline, runLog);
       await Risuai.showContainer('fullscreen');
@@ -2808,9 +2843,11 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         ${runLog?.chatContextSource ? `<span class="badge ${runLog.chatContextAvailable ? 'ok' : 'err'}">대화 컨텍스트: ${escHtml(runLog.chatContextSource)} · ${escHtml(runLog.chatContextMessageCount ?? 0)}개</span>` : ''}
         ${runLog?.chatContextError ? `<span class="badge err">컨텍스트 오류: ${escHtml(runLog.chatContextError)}</span>` : ''}
         ${runLog?.preReused ? `<span class="badge ok">Pre-Agent 재사용됨</span>` : ''}
+        ${runLog?.runLogEnabled === false ? `<span class="badge err">Run Log 꺼짐 · 표시 결과가 오래됐을 수 있음</span>` : '<span class="badge ok">Run Log 켜짐</span>'}
       </div>
     </div>
     <div class="header-actions">
+      <button id="run-log-toggle-btn" class="${runLog?.runLogEnabled === false ? 'ghost' : 'primary'}">${runLog?.runLogEnabled === false ? 'Run Log: 꺼짐' : 'Run Log: 켜짐'}</button>
       <button id="run-inspector-tab-btn" class="primary">Run Inspector</button>
       <button id="settings-tab-btn" class="ghost">설정</button>
     </div>
@@ -2836,6 +2873,11 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         await Risuai.hideContainer();
       });
       document.getElementById('settings-tab-btn')?.addEventListener('click', openLiteDashboard);
+      document.getElementById('run-log-toggle-btn')?.addEventListener('click', async () => {
+        const nextEnabled = runLog?.runLogEnabled === false;
+        await Risuai.setArgument('agents_run_log_enabled', String(nextEnabled));
+        await openRunInspector();
+      });
 
       function renderInspectorRows() {
         const root = document.getElementById('inspector-rows');
@@ -2914,6 +2956,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       const time = runLog.updatedAt || runLog.timestamp;
       const date = time ? new Date(time).toLocaleString() : '시간 정보 없음';
       const status = runLog.reason ? `${runLog.status}: ${runLog.reason}` : runLog.status || 'saved';
+      if (runLog.runLogEnabled === false) return `${date} · ${status} · Run Log 꺼짐(저장된 이전 결과)`;
       return `${date} · ${status}`;
     }
 
@@ -4426,14 +4469,15 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
         const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
         const settingBlocks = runContext.settingBlocks;
-        const preReuseKey = buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf);
-        const previousRun = await loadRunLogForScope(runScope, conf.debugLog);
+        const runLogEnabled = isRunLogEnabled(conf);
+        const preReuseKey = runLogEnabled ? buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf) : '';
+        const previousRun = runLogEnabled ? await loadRunLogForScope(runScope, conf.debugLog) : null;
         const reusableRun = findReusablePreRun(previousRun, preReuseKey);
 
         if (reusableRun) {
           lastPipelineRun = createPreReusedRunLog(type, pipeline, conf, runScope, chatContext, settingBlocks, reusableRun, preReuseKey);
           const injectedMessages = injectAgentNotes(messages, lastPipelineRun.notes);
-          await persistRunLog(lastPipelineRun, conf.debugLog);
+          await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
           if (conf.debugLog) {
             console.log(`Agents! debug: pre-agent results reused from ${lastPipelineRun.preReusedFrom || '(unknown time)'}`);
             logPromptFlow('Agents! debug: messages sent to main LLM after pre-agent reuse', injectedMessages, true);
@@ -4450,7 +4494,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           lastPipelineRun.preReuseKey = preReuseKey;
           lastPipelineRun.preReused = false;
           Object.assign(lastPipelineRun, runChatContextMeta(chatContext));
-          await persistRunLog(lastPipelineRun, conf.debugLog);
+          await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
           return messages;
         }
 
@@ -4467,7 +4511,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
         const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey, runContext);
         const injectedMessages = injectAgentNotes(messages, notes);
-        await persistRunLog(lastPipelineRun, conf.debugLog);
+        await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
         if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
         return injectedMessages;
 
@@ -4490,8 +4534,9 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         if (!hasPostAgents) {
           if (lastPipelineRun) {
             if (lastPipelineRun.status !== 'skipped' && lastPipelineRun.status !== 'pre-skipped' && lastPipelineRun.status !== 'pre-reused') lastPipelineRun.status = 'complete';
-            lastPipelineRun.finalResponse = String(content ?? '');
-            await persistRunLog(lastPipelineRun, conf.debugLog);
+            if (isRunLogEnabled(conf)) lastPipelineRun.finalResponse = String(content ?? '');
+            await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
+            if (!isRunLogEnabled(conf)) lastPipelineRun = null;
           }
           return content;
         }
@@ -4501,8 +4546,9 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           if (lastPipelineRun) {
             lastPipelineRun.status = 'post-skipped';
             lastPipelineRun.reason = 'post-agent provider API key not set';
-            lastPipelineRun.finalResponse = String(content ?? '');
-            await persistRunLog(lastPipelineRun, conf.debugLog);
+            if (isRunLogEnabled(conf)) lastPipelineRun.finalResponse = String(content ?? '');
+            await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
+            if (!isRunLogEnabled(conf)) lastPipelineRun = null;
           }
           return content;
         }
@@ -4513,7 +4559,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         }
 
         const finalContent = await runPostPipeline(content, conf, pipeline, type);
-        await persistRunLog(lastPipelineRun, conf.debugLog);
+        await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
+        if (!isRunLogEnabled(conf)) lastPipelineRun = null;
         if (conf.debugLog) logTextBlock('Agents! debug: final response after post-agents', finalContent);
         return finalContent;
       } catch (err) {
