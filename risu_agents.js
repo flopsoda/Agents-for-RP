@@ -421,7 +421,76 @@
 
     // ── 메시지 유틸 ───────────────────────────────────────────────────────────
 
-    async function buildSettingBlocks(messages) {
+    async function buildPipelineRunContext(requestMessages, chatContext, conf, pipeline) {
+      const sources = await loadSettingSources(conf?.debugLog);
+      const contextMessages = chatContext?.available === true && Array.isArray(chatContext?.messages)
+        ? chatContext.messages
+        : normalizeRequestMessages(requestMessages);
+      const maxWindow = Math.max(1, maxPreAgentContextWindow(pipeline, conf) || conf?.window || 10);
+      const loreCandidates = collectLorebookCandidates(sources.character, sources.db);
+      const loreMatch = matchActiveLorebooksLikeRisu(contextMessages, loreCandidates, {
+        scanWindow: maxWindow,
+        fullWordMatching: sources.character?.loreSettings?.fullWordMatching === true,
+        recursiveScanning: sources.character?.loreSettings?.recursiveScanning !== false,
+      });
+      const settingBlocks = await buildSettingBlocks(requestMessages, {
+        character: sources.character,
+        db: sources.db,
+        dbAvailable: sources.dbAvailable,
+        activeLorebooks: loreMatch.activeLorebooks,
+        loreCandidates,
+        loreStats: loreMatch.stats,
+      });
+      const historyCache = new Map();
+      return {
+        ...sources,
+        contextMessages,
+        maxWindow,
+        loreCandidates,
+        activeLorebooks: loreMatch.activeLorebooks,
+        loreStats: loreMatch.stats,
+        settingBlocks,
+        historyForWindow(windowSize) {
+          const key = Math.max(1, parseInt(windowSize, 10) || maxWindow);
+          if (!historyCache.has(key)) {
+            historyCache.set(key, formatHistory(contextMessages, key));
+          }
+          return historyCache.get(key);
+        },
+      };
+    }
+
+    async function loadSettingSources(debugLog) {
+      let character = null;
+      let db = null;
+      let dbAvailable = false;
+
+      try {
+        character = await Risuai.getCharacter();
+      } catch (err) {
+        console.log(`Agents! setting blocks: getCharacter failed: ${err.message}`);
+      }
+
+      try {
+        db = await Risuai.getDatabase([
+          'personas',
+          'selectedPersona',
+          'modules',
+          'enabledModules',
+        ]);
+        dbAvailable = Boolean(db);
+      } catch (err) {
+        console.log(`Agents! setting blocks: getDatabase failed: ${err.message}`);
+      }
+
+      if (debugLog && !dbAvailable) {
+        console.log('Agents! lorebook matcher: database unavailable; module lorebooks skipped');
+      }
+
+      return { character, db, dbAvailable };
+    }
+
+    async function buildSettingBlocks(messages, options = {}) {
       const parts = {
         characterDescription: '(캐릭터 설명 없음)',
         userDescription: '(유저 설명 접근 불가: DB 권한 없음)',
@@ -436,19 +505,15 @@
         activeLorebooks: 0,
       };
 
-      let character = null;
-      let db = null;
+      let character = options.character || null;
+      let db = options.db || null;
+      let dbAvailable = options.dbAvailable === true || Boolean(db);
 
-      try {
-        character = await Risuai.getCharacter();
-      } catch (err) {
-        console.log(`Agents! setting blocks: getCharacter failed: ${err.message}`);
-      }
-
-      try {
-        db = await Risuai.getDatabase(['personas', 'selectedPersona', 'modules', 'enabledModules']);
-      } catch (err) {
-        console.log(`Agents! setting blocks: getDatabase failed: ${err.message}`);
+      if (!character && !db && options.character === undefined && options.db === undefined) {
+        const sources = await loadSettingSources(false);
+        character = sources.character;
+        db = sources.db;
+        dbAvailable = sources.dbAvailable;
       }
 
       if (character) {
@@ -466,7 +531,7 @@
         }
       }
 
-      if (db) {
+      if (dbAvailable && db) {
         const persona = getSelectedPersona(db);
         if (persona) {
           const personaPrompt = String(persona.personaPrompt || '').trim();
@@ -484,16 +549,40 @@
         }
       }
 
-      const loreCandidates = collectLorebookCandidates(character, db);
-      const activeLorebooks = matchActiveLorebooks(messages, loreCandidates);
+      const loreCandidates = Array.isArray(options.loreCandidates)
+        ? options.loreCandidates
+        : collectLorebookCandidates(character, db);
+      const activeLorebooks = Array.isArray(options.activeLorebooks)
+        ? options.activeLorebooks
+        : matchActiveLorebooksLikeRisu(normalizeRequestMessages(messages), loreCandidates, {
+          scanWindow: 10,
+          fullWordMatching: character?.loreSettings?.fullWordMatching === true,
+          recursiveScanning: character?.loreSettings?.recursiveScanning !== false,
+        }).activeLorebooks;
       parts.activeLorebooks = activeLorebooks;
       stats.loreCandidates = loreCandidates.length;
       stats.activeLorebooks = activeLorebooks.length;
+      if (options.loreStats) {
+        stats.loreMatchMode = 'key-based';
+        stats.loreRecursiveMatches = options.loreStats.recursiveMatches || 0;
+        stats.loreScanWindow = options.loreStats.scanWindow || 0;
+        stats.moduleLoreCandidates = options.loreStats.moduleLoreCandidates || 0;
+      }
 
       return {
         content: formatSettingBlocks(parts),
         stats,
       };
+    }
+
+    function normalizeRequestMessages(messages) {
+      return (Array.isArray(messages) ? messages : [])
+        .filter(msg => msg?.role === 'user' || msg?.role === 'assistant')
+        .map(msg => ({
+          role: msg.role,
+          content: String(msg.content || ''),
+        }))
+        .filter(msg => msg.content.trim());
     }
 
     function getUserInput(messages) {
@@ -661,25 +750,25 @@
       const candidates = [];
       const seen = new Set();
 
-      const addLore = (lore, sourcePrefix) => {
+      const addLore = (lore, sourcePrefix, sourceType = 'unknown', sourceOrder = 0) => {
         if (!lore) return;
         const content = firstNonEmpty(lore.content, lore.prompt, lore.text, lore.entry);
         if (!content) return;
         const label = firstNonEmpty(lore.comment, lore.name, lore.displayName, sourcePrefix, '로어북');
-        const key = normalizeForMatch(`${label}\n${content}`);
-        if (seen.has(key)) return;
-        seen.add(key);
-        candidates.push({ label, content });
+        const dedupeKey = normalizeForMatch(`${sourceType}\n${label}\n${content}\n${firstNonEmpty(lore.key, lore.keys, lore.keywords)}`);
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        candidates.push(normalizeLorebookCandidate(lore, label, content, sourcePrefix, sourceType, sourceOrder, candidates.length));
       };
 
       if (character) {
         if (Array.isArray(character.globalLore)) {
-          character.globalLore.forEach(lore => addLore(lore, '캐릭터 로어북'));
+          character.globalLore.forEach((lore, idx) => addLore(lore, '캐릭터 로어북', 'character', idx));
         }
 
         const chat = getCurrentCharacterChat(character);
         if (Array.isArray(chat?.localLore)) {
-          chat.localLore.forEach(lore => addLore(lore, '채팅 로어북'));
+          chat.localLore.forEach((lore, idx) => addLore(lore, '채팅 로어북', 'chat', idx));
         }
       }
 
@@ -691,25 +780,35 @@
           enabled.has(String(module?.name)) ||
           enabled.has(String(module?.namespace));
         if (!moduleEnabled || !Array.isArray(module?.lorebook)) continue;
-        module.lorebook.forEach(lore => addLore(lore, `모듈 로어북: ${module.name || module.id || 'unknown'}`));
+        module.lorebook.forEach((lore, idx) => addLore(lore, `모듈 로어북: ${module.name || module.id || 'unknown'}`, 'module', idx));
       }
 
       return candidates;
     }
 
-    function matchActiveLorebooks(messages, candidates) {
-      if (!candidates.length) return [];
-
-      const requestText = normalizeForMatch(
-        messages
-          .map(msg => String(msg?.content || ''))
-          .filter(Boolean)
-          .join('\n\n')
-      );
-
-      if (!requestText) return [];
-
-      return candidates.filter(candidate => candidateContentMatchesRequest(requestText, candidate.content));
+    function normalizeLorebookCandidate(lore, label, content, sourcePrefix, sourceType, sourceOrder, index) {
+      const keys = splitLoreKeys(firstNonEmpty(lore.key, lore.keys, lore.keywords));
+      const secondaryKeys = splitLoreKeys(firstNonEmpty(lore.secondkey, lore.secondary_keys));
+      return {
+        id: String(lore.id || `${sourceType}-${sourceOrder}-${index}`),
+        label,
+        content,
+        source: sourcePrefix,
+        sourceType,
+        sourceOrder,
+        originalIndex: index,
+        key: keys.join(', '),
+        keys,
+        secondkey: secondaryKeys.join(', '),
+        secondaryKeys,
+        insertorder: Number.isFinite(Number(lore.insertorder ?? lore.order ?? lore.priority))
+          ? Number(lore.insertorder ?? lore.order ?? lore.priority)
+          : 100,
+        alwaysActive: lore.alwaysActive === true || lore.constant === true || lore.forceActivation === true || lore.mode === 'constant',
+        selective: lore.selective === true,
+        useRegex: lore.useRegex === true,
+        mode: String(lore.mode || 'normal'),
+      };
     }
 
     function normalizeForMatch(text) {
@@ -719,22 +818,266 @@
         .toLowerCase();
     }
 
-    function candidateContentMatchesRequest(requestText, content) {
-      const normalizedContent = normalizeForMatch(content);
-      if (normalizedContent && requestText.includes(normalizedContent)) return true;
+    function matchActiveLorebooksLikeRisu(messages, candidates, options = {}) {
+      const list = Array.isArray(candidates) ? candidates : [];
+      const scanWindow = Math.max(1, parseInt(options.scanWindow, 10) || 10);
+      const baseMessages = normalizeRequestMessages(messages).slice(-scanWindow);
+      const recursiveScanning = options.recursiveScanning !== false;
+      const defaultFullWordMatching = options.fullWordMatching === true;
+      const active = [];
+      const activated = new Set();
+      const recursiveTexts = [];
+      let recursiveMatches = 0;
+      let matched = true;
 
-      const strippedContent = normalizeForMatch(stripLoreDirectives(content));
-      if (strippedContent && requestText.includes(strippedContent)) return true;
+      while (matched) {
+        matched = false;
+        for (let idx = 0; idx < list.length; idx += 1) {
+          if (activated.has(idx)) continue;
+          const candidate = list[idx];
+          if (!candidate || candidate.mode === 'folder') continue;
 
-      const meaningfulSegments = String(content || '')
-        .split(/\{\{[^{}]+\}\}/g)
-        .map(normalizeForMatch)
-        .filter(segment => segment.length >= 40);
-      return meaningfulSegments.some(segment => requestText.includes(segment));
+          const parsed = parseLorebookDecorators(candidate.content);
+          const matchConfig = {
+            fullWordMatching: parsed.fullWordMatching === null ? defaultFullWordMatching : parsed.fullWordMatching,
+            useRecursiveTexts: parsed.noRecursiveSearch !== true,
+          };
+          const searchTexts = baseMessages
+            .map(msg => ({ text: msg.content, recursive: false }))
+            .concat(matchConfig.useRecursiveTexts ? recursiveTexts.map(text => ({ text, recursive: true })) : []);
+          const result = evaluateLorebookActivation(candidate, parsed, searchTexts, matchConfig);
+          if (!result.active) continue;
+
+          const activeLore = {
+            ...candidate,
+            content: parsed.content,
+            activationReason: result.reason,
+            matchedByRecursive: result.matchedByRecursive,
+          };
+          active.push(activeLore);
+          activated.add(idx);
+          if (result.matchedByRecursive) recursiveMatches += 1;
+
+          const itemRecursive = parsed.recursiveOverride === null
+            ? recursiveScanning
+            : parsed.recursiveOverride;
+          if (itemRecursive) {
+            recursiveTexts.push(parsed.content);
+            matched = true;
+          }
+        }
+      }
+
+      return {
+        activeLorebooks: active.sort((a, b) => (a.insertorder - b.insertorder) || (a.originalIndex - b.originalIndex)),
+        stats: {
+          scanWindow,
+          recursiveMatches,
+          moduleLoreCandidates: list.filter(item => item.sourceType === 'module').length,
+        },
+      };
     }
 
-    function stripLoreDirectives(text) {
-      return String(text || '').replace(/\{\{[^{}]+::[^{}]*\}\}/g, '');
+    function evaluateLorebookActivation(candidate, parsed, searchTexts, config) {
+      if (parsed.forceState === 'deactivate') {
+        return { active: false, reason: 'dont_activate', matchedByRecursive: false };
+      }
+      if (parsed.forceState === 'activate' || candidate.alwaysActive) {
+        return { active: true, reason: parsed.forceState === 'activate' ? 'activate' : 'alwaysActive', matchedByRecursive: false };
+      }
+
+      const positiveGroups = [];
+      if (candidate.keys.length) positiveGroups.push(candidate.keys);
+      parsed.additionalKeys.forEach(keys => positiveGroups.push(keys));
+      if (candidate.selective && candidate.secondaryKeys.length) positiveGroups.push(candidate.secondaryKeys);
+      if (!positiveGroups.length) return { active: false, reason: 'no-key', matchedByRecursive: false };
+
+      for (const group of parsed.excludeKeys) {
+        if (searchKeyGroup(searchTexts, group, candidate.useRegex, config.fullWordMatching, false).matched) {
+          return { active: false, reason: 'exclude_keys', matchedByRecursive: false };
+        }
+      }
+      for (const group of parsed.excludeKeysAll) {
+        if (searchKeyGroup(searchTexts, group, candidate.useRegex, config.fullWordMatching, true).matched) {
+          return { active: false, reason: 'exclude_keys_all', matchedByRecursive: false };
+        }
+      }
+
+      let matchedByRecursive = false;
+      for (const group of positiveGroups) {
+        const result = searchKeyGroup(searchTexts, group, candidate.useRegex, config.fullWordMatching, false);
+        if (!result.matched) return { active: false, reason: 'key-missing', matchedByRecursive: false };
+        matchedByRecursive = matchedByRecursive || result.matchedByRecursive;
+      }
+      return { active: true, reason: 'key', matchedByRecursive };
+    }
+
+    function searchKeyGroup(texts, keys, useRegex, fullWordMatching, requireAll) {
+      const cleanKeys = splitLoreKeys(keys);
+      if (!cleanKeys.length) return { matched: false, matchedByRecursive: false };
+      let matchedCount = 0;
+      let matchedByRecursive = false;
+      for (const key of cleanKeys) {
+        const result = searchSingleKey(texts, key, useRegex, fullWordMatching);
+        if (result.matched) {
+          matchedCount += 1;
+          matchedByRecursive = matchedByRecursive || result.matchedByRecursive;
+          if (!requireAll) return { matched: true, matchedByRecursive };
+        } else if (requireAll) {
+          return { matched: false, matchedByRecursive: false };
+        }
+      }
+      return {
+        matched: requireAll ? matchedCount === cleanKeys.length : false,
+        matchedByRecursive,
+      };
+    }
+
+    function searchSingleKey(texts, key, useRegex, fullWordMatching) {
+      const sourceTexts = (Array.isArray(texts) ? texts : [])
+        .map(item => (item && typeof item === 'object' && !Array.isArray(item)
+          ? { text: String(item.text || ''), recursive: item.recursive === true }
+          : { text: String(item || ''), recursive: false }));
+      if (useRegex) {
+        const regex = makeLoreRegex(key);
+        if (!regex) return { matched: false, matchedByRecursive: false };
+        for (let idx = 0; idx < sourceTexts.length; idx += 1) {
+          regex.lastIndex = 0;
+          if (regex.test(sourceTexts[idx].text)) {
+            return { matched: true, matchedByRecursive: sourceTexts[idx].recursive };
+          }
+        }
+        return { matched: false, matchedByRecursive: false };
+      }
+
+      const preparedKey = prepareLoreMatchText(key, fullWordMatching);
+      if (!preparedKey) return { matched: false, matchedByRecursive: false };
+      for (let idx = 0; idx < sourceTexts.length; idx += 1) {
+        const preparedText = prepareLoreMatchText(sourceTexts[idx].text, fullWordMatching);
+        if (fullWordMatching) {
+          if (preparedText.split(/\s+/).includes(preparedKey)) {
+            return { matched: true, matchedByRecursive: sourceTexts[idx].recursive };
+          }
+        } else if (preparedText.includes(preparedKey)) {
+          return { matched: true, matchedByRecursive: sourceTexts[idx].recursive };
+        }
+      }
+      return { matched: false, matchedByRecursive: false };
+    }
+
+    function prepareLoreMatchText(text, fullWordMatching) {
+      const cleaned = String(text || '')
+        .toLocaleLowerCase()
+        .replace(/\{\{\/\/(.+?)\}\}/g, '')
+        .replace(/\{\{comment:(.+?)\}\}/g, '')
+        .trim();
+      return fullWordMatching ? cleaned : cleaned.replace(/ /g, '');
+    }
+
+    function makeLoreRegex(pattern) {
+      const raw = String(pattern || '').trim();
+      if (!raw.startsWith('/')) return null;
+      const lastSlash = raw.lastIndexOf('/');
+      if (lastSlash <= 0) return null;
+      const source = raw.slice(1, lastSlash);
+      const flags = raw.slice(lastSlash + 1);
+      try {
+        return new RegExp(source, flags);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function parseLorebookDecorators(content) {
+      const result = {
+        content: String(content || ''),
+        additionalKeys: [],
+        excludeKeys: [],
+        excludeKeysAll: [],
+        fullWordMatching: null,
+        forceState: 'none',
+        recursiveOverride: null,
+        noRecursiveSearch: false,
+      };
+
+      const consume = (name, args) => applyLoreDecorator(result, name, args);
+      result.content = result.content
+        .replace(/\{\{\s*([^:{}\s]+)(?:::([^{}]*))?\s*\}\}/g, (match, name, rawArgs = '') => {
+          return consume(name, splitDecoratorArgs(rawArgs)) ? '' : match;
+        })
+        .replace(/^\s*@@([a-zA-Z_][\w-]*)(?:\s+(.+?))?\s*$/gm, (match, name, rawArgs = '') => {
+          return consume(name, splitDecoratorArgs(rawArgs)) ? '' : match;
+        })
+        .trim();
+
+      return result;
+    }
+
+    function applyLoreDecorator(result, rawName, args) {
+      const name = String(rawName || '').trim().replace(/^@@/, '').toLowerCase();
+      switch (name) {
+        case 'additional_keys':
+          {
+            const keys = splitLoreKeys(args);
+            if (keys.length) result.additionalKeys.push(keys);
+          }
+          return true;
+        case 'exclude_keys':
+          {
+            const keys = splitLoreKeys(args);
+            if (keys.length) result.excludeKeys.push(keys);
+          }
+          return true;
+        case 'exclude_keys_all':
+          {
+            const keys = splitLoreKeys(args);
+            if (keys.length) result.excludeKeysAll.push(keys);
+          }
+          return true;
+        case 'match_full_word':
+          result.fullWordMatching = true;
+          return true;
+        case 'match_partial_word':
+          result.fullWordMatching = false;
+          return true;
+        case 'activate':
+          result.forceState = 'activate';
+          return true;
+        case 'dont_activate':
+          result.forceState = 'deactivate';
+          return true;
+        case 'recursive':
+          result.recursiveOverride = true;
+          return true;
+        case 'unrecursive':
+          result.recursiveOverride = false;
+          return true;
+        case 'no_recursive_search':
+          result.noRecursiveSearch = true;
+          return true;
+        case 'scan_depth':
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    function splitDecoratorArgs(value) {
+      if (Array.isArray(value)) return value.map(String).map(item => item.trim()).filter(Boolean);
+      const text = String(value || '').trim();
+      if (!text) return [];
+      if (text.includes('::')) return text.split('::').map(item => item.trim()).filter(Boolean);
+      return text.split(',').map(item => item.trim()).filter(Boolean);
+    }
+
+    function splitLoreKeys(value) {
+      if (Array.isArray(value)) {
+        return value.flatMap(item => splitLoreKeys(item));
+      }
+      return String(value || '')
+        .split(',')
+        .map(key => key.trim())
+        .filter(Boolean);
     }
 
     function formatSettingBlocks(parts) {
@@ -1759,6 +2102,18 @@
       return maxWindow;
     }
 
+    function maxPreAgentContextWindow(pipeline, conf) {
+      let maxWindow = 0;
+      for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+        getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
+          const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+          const window = Math.max(1, parseInt(preset.contextWindow || conf.window, 10) || conf.window || 10);
+          maxWindow = Math.max(maxWindow, window);
+        });
+      }
+      return maxWindow;
+    }
+
     function hashPreAgentConfig(pipeline, conf) {
       const hasher = createTextHasher().update('preAgents');
       for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
@@ -2008,7 +2363,7 @@
       }
     }
 
-    async function runPrePipeline(_requestMessages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey = '') {
+    async function runPrePipeline(_requestMessages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey = '', runContext = null) {
       const contextMessages = chatContext?.available === true && Array.isArray(chatContext?.messages)
         ? chatContext.messages
         : [];
@@ -2090,7 +2445,9 @@
               memoryStatus: agent.memoryEnabled ? 'skipped' : 'disabled',
             };
           }
-          const history = formatHistory(contextMessages, agentConf.window);
+          const history = runContext?.historyForWindow
+            ? runContext.historyForWindow(agentConf.window)
+            : formatHistory(contextMessages, agentConf.window);
           const agentMemory = memoryCanWrite
             ? await loadAgentMemory(agent, memoryScope, contextMessages, conf.debugLog)
             : await loadAgentMemoryReadOnly(agent, memoryScope, conf.debugLog, memoryUnavailableReason);
@@ -4052,6 +4409,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       console.log(`authorNote: ${stats.authorNote}`);
       console.log(`loreCandidates: ${stats.loreCandidates}`);
       console.log(`activeLorebooks: ${stats.activeLorebooks}`);
+      if (stats.loreMatchMode) console.log(`loreMatchMode: ${stats.loreMatchMode}`);
+      if (stats.loreScanWindow) console.log(`loreScanWindow: ${stats.loreScanWindow}`);
+      if (stats.loreRecursiveMatches) console.log(`loreRecursiveMatches: ${stats.loreRecursiveMatches}`);
+      if (stats.moduleLoreCandidates !== undefined) console.log(`moduleLoreCandidates: ${stats.moduleLoreCandidates}`);
       if (console.groupEnd) console.groupEnd();
     }
 
@@ -4063,7 +4424,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const pipeline = await getPipelineConfig(conf);
         const runScope = await getAgentMemoryScope(conf.debugLog);
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
-        const settingBlocks = await buildSettingBlocks(messages);
+        const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
+        const settingBlocks = runContext.settingBlocks;
         const preReuseKey = buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf);
         const previousRun = await loadRunLogForScope(runScope, conf.debugLog);
         const reusableRun = findReusablePreRun(previousRun, preReuseKey);
@@ -4103,7 +4465,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           logTextBlock('Agents! debug: current user input passed to agents', getUserInput(chatContext.messages));
         }
 
-        const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey);
+        const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey, runContext);
         const injectedMessages = injectAgentNotes(messages, notes);
         await persistRunLog(lastPipelineRun, conf.debugLog);
         if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
