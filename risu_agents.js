@@ -44,7 +44,7 @@
     const RUN_LOG_BODY_VERSION = 1;
     const RUN_LOG_BODY_INLINE_LIMIT = 1000;
     const RUN_LOG_BODY_PREVIEW_CHARS = 700;
-    const PRE_REUSE_VERSION = 1;
+    const PRE_REUSE_VERSION = 2;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
@@ -1679,69 +1679,117 @@
 
     function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf) {
       if (chatContext?.available !== true || !scope?.chatKey) return '';
-      const contextMessages = Array.isArray(chatContext.messages)
-        ? chatContext.messages.map(msg => ({
-          role: msg.role,
-          content: String(msg.content || ''),
-        }))
-        : [];
-      const preAgents = [];
+      const contextMessages = Array.isArray(chatContext.messages) ? chatContext.messages : [];
+      const messageCount = chatContext.messageCount ?? contextMessages.length;
+      const maxHistoryWindow = maxPreAgentHistoryWindow(pipeline, conf);
+      const currentUserHash = hashCurrentUserMessage(contextMessages);
+      const recentHistoryHash = hashRecentMessages(contextMessages, maxHistoryWindow);
+      const settingBlocksHash = hashTextBlock(settingBlocks?.content || '');
+      const preAgentsHash = hashPreAgentConfig(pipeline, conf);
+      const keyHash = createTextHasher()
+        .update('version').update(PRE_REUSE_VERSION)
+        .update('chatKey').update(scope.chatKey)
+        .update('messageCount').update(messageCount)
+        .update('currentUserHash').update(currentUserHash)
+        .update('recentHistoryHash').update(recentHistoryHash)
+        .update('settingBlocksHash').update(settingBlocksHash)
+        .update('preAgentsHash').update(preAgentsHash)
+        .digest();
+      return `v${PRE_REUSE_VERSION}:${keyHash}:${messageCount}:${maxHistoryWindow}`;
+    }
+
+    function createTextHasher() {
+      let hash = 2166136261;
+      let length = 0;
+      return {
+        update(value) {
+          const text = String(value ?? '');
+          for (let idx = 0; idx < text.length; idx += 1) {
+            hash ^= text.charCodeAt(idx);
+            hash = Math.imul(hash, 16777619);
+          }
+          hash ^= 31;
+          hash = Math.imul(hash, 16777619);
+          length += text.length + 1;
+          return this;
+        },
+        digest() {
+          return `${(hash >>> 0).toString(16).padStart(8, '0')}:${length}`;
+        },
+      };
+    }
+
+    function hashTextBlock(text) {
+      return createTextHasher().update(text).digest();
+    }
+
+    function hashCurrentUserMessage(messages) {
+      for (let idx = (Array.isArray(messages) ? messages.length : 0) - 1; idx >= 0; idx -= 1) {
+        if (messages[idx]?.role === 'user') {
+          return createTextHasher()
+            .update('user')
+            .update(messages[idx].content || '')
+            .digest();
+        }
+      }
+      return hashTextBlock('');
+    }
+
+    function hashRecentMessages(messages, windowSize) {
+      const hasher = createTextHasher().update('recentMessages').update(windowSize);
+      const chatMsgs = (Array.isArray(messages) ? messages : []).filter(m => m.role === 'user' || m.role === 'assistant');
+      const recent = windowSize > 0 ? chatMsgs.slice(-(windowSize + 1), -1) : [];
+      hasher.update(recent.length);
+      recent.forEach((msg) => {
+        hasher.update(msg.role).update(msg.content || '');
+      });
+      return hasher.digest();
+    }
+
+    function maxPreAgentHistoryWindow(pipeline, conf) {
+      let maxWindow = 0;
       for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
         getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
+          if (!agent.includeHistory) return;
           const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
-          preAgents.push({
-            id: agent.id,
-            row: agent.row,
-            column: agent.column,
-            enabled: agent.enabled !== false,
-            modelPresetId: agent.modelPresetId,
-            systemPrompt: agent.systemPrompt || '',
-            outputInstruction: agent.outputInstruction || '',
-            includeSettingBlocks: Boolean(agent.includeSettingBlocks),
-            includeHistory: Boolean(agent.includeHistory),
-            includeUserInput: Boolean(agent.includeUserInput),
-            includePreviousNotes: Boolean(agent.includePreviousNotes),
-            memoryEnabled: Boolean(agent.mode === 'pre' && agent.memoryEnabled),
-            memoryInstruction: agent.memoryInstruction || '',
-            memoryFormat: agent.memoryFormat || '',
-            preset: {
-              provider: preset?.provider || '',
-              model: preset?.model || '',
-              baseUrl: preset?.baseUrl || '',
-              temperature: String(preset?.temperature ?? ''),
-              maxTokens: String(preset?.maxTokens ?? ''),
-              contextWindow: String(preset?.contextWindow ?? ''),
-            },
-          });
+          const window = Math.max(1, parseInt(preset.contextWindow || conf.window, 10) || conf.window || 10);
+          maxWindow = Math.max(maxWindow, window);
         });
       }
-
-      const payload = {
-        version: PRE_REUSE_VERSION,
-        chatKey: scope.chatKey,
-        chatContextMessageCount: chatContext.messageCount ?? contextMessages.length,
-        messages: contextMessages,
-        userInput: getUserInput(contextMessages),
-        settingBlocks: settingBlocks?.content || '',
-        preAgents,
-      };
-      return `v${PRE_REUSE_VERSION}:${hashStablePayload(payload)}`;
+      return maxWindow;
     }
 
-    function hashStablePayload(value) {
-      const text = stableStringify(value);
-      let hash = 2166136261;
-      for (let idx = 0; idx < text.length; idx += 1) {
-        hash ^= text.charCodeAt(idx);
-        hash = Math.imul(hash, 16777619);
+    function hashPreAgentConfig(pipeline, conf) {
+      const hasher = createTextHasher().update('preAgents');
+      for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+        const agents = getEnabledAgentsForRow(pipeline, row);
+        hasher.update('row').update(row).update('count').update(agents.length);
+        agents.forEach((agent) => {
+          const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+          hasher
+            .update(agent.id)
+            .update(agent.row)
+            .update(agent.column)
+            .update(agent.enabled !== false)
+            .update(agent.modelPresetId)
+            .update(agent.systemPrompt || '')
+            .update(agent.outputInstruction || '')
+            .update(Boolean(agent.includeSettingBlocks))
+            .update(Boolean(agent.includeHistory))
+            .update(Boolean(agent.includeUserInput))
+            .update(Boolean(agent.includePreviousNotes))
+            .update(Boolean(agent.mode === 'pre' && agent.memoryEnabled))
+            .update(agent.memoryInstruction || '')
+            .update(agent.memoryFormat || '')
+            .update(preset?.provider || '')
+            .update(preset?.model || '')
+            .update(preset?.baseUrl || '')
+            .update(String(preset?.temperature ?? ''))
+            .update(String(preset?.maxTokens ?? ''))
+            .update(String(preset?.contextWindow ?? ''));
+        });
       }
-      return `${(hash >>> 0).toString(16).padStart(8, '0')}:${text.length}`;
-    }
-
-    function stableStringify(value) {
-      if (value === null || typeof value !== 'object') return JSON.stringify(value);
-      if (Array.isArray(value)) return `[${value.map(item => stableStringify(item)).join(',')}]`;
-      return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+      return hasher.digest();
     }
 
     async function loadRunLogForScope(scope, debugLog) {
