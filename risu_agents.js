@@ -41,6 +41,7 @@
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
     const MEMORY_STACK_VERSION = 3;
     const RUN_LOG_VERSION = 1;
+    const PRE_REUSE_VERSION = 1;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
@@ -1637,6 +1638,10 @@
         userInput: '',
         settingBlocks: '',
         settingBlockStats: null,
+        preReuseVersion: PRE_REUSE_VERSION,
+        preReuseKey: '',
+        preReused: false,
+        preReusedFrom: '',
         timestamp: Date.now(),
         updatedAt: Date.now(),
       };
@@ -1650,6 +1655,121 @@
         chatContextMessageCount: chatContext?.messageCount ?? 0,
         chatContextStoredMessageCount: chatContext?.storedMessageCount ?? null,
         chatContextAppendedCurrentUser: Boolean(chatContext?.appendedCurrentUser),
+      };
+    }
+
+    function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf) {
+      if (chatContext?.available !== true || !scope?.chatKey) return '';
+      const contextMessages = Array.isArray(chatContext.messages)
+        ? chatContext.messages.map(msg => ({
+          role: msg.role,
+          content: String(msg.content || ''),
+        }))
+        : [];
+      const preAgents = [];
+      for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+        getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
+          const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+          preAgents.push({
+            id: agent.id,
+            row: agent.row,
+            column: agent.column,
+            enabled: agent.enabled !== false,
+            modelPresetId: agent.modelPresetId,
+            systemPrompt: agent.systemPrompt || '',
+            outputInstruction: agent.outputInstruction || '',
+            includeSettingBlocks: Boolean(agent.includeSettingBlocks),
+            includeHistory: Boolean(agent.includeHistory),
+            includeUserInput: Boolean(agent.includeUserInput),
+            includePreviousNotes: Boolean(agent.includePreviousNotes),
+            memoryEnabled: Boolean(agent.mode === 'pre' && agent.memoryEnabled),
+            memoryInstruction: agent.memoryInstruction || '',
+            memoryFormat: agent.memoryFormat || '',
+            preset: {
+              provider: preset?.provider || '',
+              model: preset?.model || '',
+              baseUrl: preset?.baseUrl || '',
+              temperature: String(preset?.temperature ?? ''),
+              maxTokens: String(preset?.maxTokens ?? ''),
+              contextWindow: String(preset?.contextWindow ?? ''),
+            },
+          });
+        });
+      }
+
+      const payload = {
+        version: PRE_REUSE_VERSION,
+        chatKey: scope.chatKey,
+        chatContextMessageCount: chatContext.messageCount ?? contextMessages.length,
+        messages: contextMessages,
+        userInput: getUserInput(contextMessages),
+        settingBlocks: settingBlocks?.content || '',
+        preAgents,
+      };
+      return `v${PRE_REUSE_VERSION}:${hashStablePayload(payload)}`;
+    }
+
+    function hashStablePayload(value) {
+      const text = stableStringify(value);
+      let hash = 2166136261;
+      for (let idx = 0; idx < text.length; idx += 1) {
+        hash ^= text.charCodeAt(idx);
+        hash = Math.imul(hash, 16777619);
+      }
+      return `${(hash >>> 0).toString(16).padStart(8, '0')}:${text.length}`;
+    }
+
+    function stableStringify(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return `[${value.map(item => stableStringify(item)).join(',')}]`;
+      return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+    }
+
+    async function loadRunLogForScope(scope, debugLog) {
+      const key = agentRunLogKey(scope || {});
+      if (!key) return null;
+      try {
+        const run = await Risuai.pluginStorage.getItem(key);
+        return run && typeof run === 'object' ? { ...run, runKey: run.runKey || key } : null;
+      } catch (err) {
+        if (debugLog) console.log(`Agents! pre-agent reuse load failed: ${err.message}`);
+        return null;
+      }
+    }
+
+    function findReusablePreRun(previousRun, preReuseKey) {
+      if (!preReuseKey || !previousRun || previousRun.preReuseKey !== preReuseKey) return null;
+      const notes = Array.isArray(previousRun.notes) ? previousRun.notes : [];
+      if (!notes.some(note => String(note?.content || '').trim())) return null;
+      const preResults = Array.isArray(previousRun.preResults) ? previousRun.preResults : [];
+      if (!preResults.some(result => result?.status === 'success' || result?.status === 'skipped')) return null;
+      return previousRun;
+    }
+
+    function createPreReusedRunLog(type, pipeline, conf, scope, chatContext, settingBlocks, previousRun, preReuseKey) {
+      const notes = JSON.parse(JSON.stringify(previousRun.notes || []));
+      const preResults = JSON.parse(JSON.stringify(previousRun.preResults || [])).map(result => ({
+        ...result,
+        reused: true,
+        memoryStatus: result.memoryStatus && result.memoryStatus !== 'disabled' ? 'reused' : result.memoryStatus,
+        memoryUpdated: false,
+      }));
+      const run = createRunLogBase(type, pipeline, conf, scope, 'pre-reused', 'pre-agent results reused');
+      return {
+        ...run,
+        pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
+        settingBlocks: settingBlocks.content,
+        settingBlockStats: settingBlocks.stats,
+        ...runChatContextMeta(chatContext),
+        preReuseVersion: PRE_REUSE_VERSION,
+        preReuseKey,
+        preReused: true,
+        preReusedFrom: previousRun.preReusedFrom || previousRun.updatedAt || previousRun.timestamp || '',
+        preResults,
+        postResults: [],
+        notes,
+        userInput: getUserInput(chatContext.messages),
+        finalResponse: '',
       };
     }
 
@@ -1749,7 +1869,7 @@
       }
     }
 
-    async function runPrePipeline(_requestMessages, chatContext, conf, pipeline, settingBlocks, type, runScope) {
+    async function runPrePipeline(_requestMessages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey = '') {
       const contextMessages = chatContext?.available === true && Array.isArray(chatContext?.messages)
         ? chatContext.messages
         : [];
@@ -1797,6 +1917,10 @@
           pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
           settingBlocks: settingBlocks.content,
           settingBlockStats: settingBlocks.stats,
+          preReuseVersion: PRE_REUSE_VERSION,
+          preReuseKey,
+          preReused: false,
+          preReusedFrom: '',
           ...runChatContextMeta(chatContext),
           preResults,
           postResults: [],
@@ -1940,6 +2064,10 @@
         pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
+        preReuseVersion: PRE_REUSE_VERSION,
+        preReuseKey,
+        preReused: false,
+        preReusedFrom: '',
         ...runChatContextMeta({
           ...chatContext,
           messageCount: chatContext?.messageCount ?? contextMessages.length,
@@ -2032,7 +2160,7 @@
 
       if (lastPipelineRun) {
         lastPipelineRun.postResults = postResults;
-        lastPipelineRun.status = 'complete';
+        lastPipelineRun.status = lastPipelineRun.preReused ? 'pre-reused' : 'complete';
         lastPipelineRun.finalResponse = currentResponse;
       }
 
@@ -2183,6 +2311,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         ${runLog?.chatScopeAvailable === false ? `<span class="badge err">채팅방 스코프 없음${runLog.chatScopeError ? `: ${escHtml(runLog.chatScopeError)}` : ''}</span>` : ''}
         ${runLog?.chatContextSource ? `<span class="badge ${runLog.chatContextAvailable ? 'ok' : 'err'}">대화 컨텍스트: ${escHtml(runLog.chatContextSource)} · ${escHtml(runLog.chatContextMessageCount ?? 0)}개</span>` : ''}
         ${runLog?.chatContextError ? `<span class="badge err">컨텍스트 오류: ${escHtml(runLog.chatContextError)}</span>` : ''}
+        ${runLog?.preReused ? `<span class="badge ok">Pre-Agent 재사용됨</span>` : ''}
       </div>
     </div>
     <div class="header-actions">
@@ -2248,9 +2377,10 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
         const status = result ? resultStatusLabel(result.status) : '결과 없음';
+        const reused = result?.reused ? ' · 재사용됨' : '';
         return `<div class="agent-card${selected}${disabled} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(preset.name || preset.model || 'model preset')} · ${escHtml(status)}${escHtml(memory)}</div>
+          <div class="agent-meta">${escHtml(preset.name || preset.model || 'model preset')} · ${escHtml(status)}${escHtml(memory)}${escHtml(reused)}</div>
         </div>`;
       }
 
@@ -2319,12 +2449,13 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         failed: '실패',
         skipped: '스킵',
         empty: '빈 응답',
+        'pre-reused': '재사용됨',
       };
       return labels[status] || status || '성공';
     }
 
     function statusBadgeClass(status) {
-      if (status === 'success' || status === 'updated') return 'ok';
+      if (status === 'success' || status === 'updated' || status === 'reused' || status === 'pre-reused') return 'ok';
       if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
       return 'neutral';
     }
@@ -2338,6 +2469,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         'storage-failed': '저장 실패',
         'chat-context-unavailable': '대화 컨텍스트 없음',
         'chat-scope-unavailable': '채팅방 스코프 없음',
+        reused: '재사용됨',
         skipped: '스킵',
         failed: '실패',
       };
@@ -2353,6 +2485,7 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         <span class="badge neutral">Row ${escHtml(agent.row + 1)}</span>
         <span class="badge neutral">${escHtml(modeLabel)}</span>
         ${resultBadge}
+        ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
       </div>`;
       const memoryButton = memoryInspectorButtonHtml(agent);
@@ -3729,17 +3862,34 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const pipeline = await getPipelineConfig(conf);
         const runScope = await getAgentMemoryScope(conf.debugLog);
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
+        const settingBlocks = await buildSettingBlocks(messages);
+        const preReuseKey = buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf);
+        const previousRun = await loadRunLogForScope(runScope, conf.debugLog);
+        const reusableRun = findReusablePreRun(previousRun, preReuseKey);
+
+        if (reusableRun) {
+          lastPipelineRun = createPreReusedRunLog(type, pipeline, conf, runScope, chatContext, settingBlocks, reusableRun, preReuseKey);
+          const injectedMessages = injectAgentNotes(messages, lastPipelineRun.notes);
+          await persistRunLog(lastPipelineRun, conf.debugLog);
+          if (conf.debugLog) {
+            console.log(`Agents! debug: pre-agent results reused from ${lastPipelineRun.preReusedFrom || '(unknown time)'}`);
+            logPromptFlow('Agents! debug: messages sent to main LLM after pre-agent reuse', injectedMessages, true);
+          }
+          return injectedMessages;
+        }
 
         if (!hasUsableProviderKeyForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
           console.log('Agents!: provider API key not set — pre-agent pipeline skipped');
           lastPipelineRun = createRunLogBase(type, pipeline, conf, runScope, 'skipped', 'pre-agent provider API key not set');
           lastPipelineRun.userInput = getUserInput(chatContext.messages);
+          lastPipelineRun.settingBlocks = settingBlocks.content;
+          lastPipelineRun.settingBlockStats = settingBlocks.stats;
+          lastPipelineRun.preReuseKey = preReuseKey;
+          lastPipelineRun.preReused = false;
           Object.assign(lastPipelineRun, runChatContextMeta(chatContext));
           await persistRunLog(lastPipelineRun, conf.debugLog);
           return messages;
         }
-
-        const settingBlocks = await buildSettingBlocks(messages);
 
         if (conf.debugLog) {
           console.log('Agents! debug: beforeRequest type =', type);
@@ -3752,7 +3902,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           logTextBlock('Agents! debug: current user input passed to agents', getUserInput(chatContext.messages));
         }
 
-        const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope);
+        const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey);
         const injectedMessages = injectAgentNotes(messages, notes);
         await persistRunLog(lastPipelineRun, conf.debugLog);
         if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
@@ -3776,7 +3926,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
         if (!hasPostAgents) {
           if (lastPipelineRun) {
-            if (lastPipelineRun.status !== 'skipped' && lastPipelineRun.status !== 'pre-skipped') lastPipelineRun.status = 'complete';
+            if (lastPipelineRun.status !== 'skipped' && lastPipelineRun.status !== 'pre-skipped' && lastPipelineRun.status !== 'pre-reused') lastPipelineRun.status = 'complete';
             lastPipelineRun.finalResponse = String(content ?? '');
             await persistRunLog(lastPipelineRun, conf.debugLog);
           }
