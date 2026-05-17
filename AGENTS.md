@@ -34,6 +34,14 @@ This project targets RisuAI plugin development. Use the local reference files in
 - Do not block chat generation on optional helper failures unless the user explicitly wants hard failure behavior.
 - For long network work in hooks, use timeouts or abort signals where the API supports them.
 
+## Git Workflow
+
+- When a user requests a feature, bug fix, refactor, or other code change, complete the implementation, run the relevant checks, and create a git commit before finishing.
+- Before committing, run `git status --short` and stage only the files intended for that change.
+- Keep each commit scoped to one completed feature or fix.
+- Use short, clear English commit messages that describe the change.
+- Do not commit if the user explicitly says not to commit.
+
 ## Documentation Policy
 
 - Prefer current files copied from the RisuAI GitHub repository over old Wiki pages.
