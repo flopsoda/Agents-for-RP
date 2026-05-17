@@ -41,6 +41,9 @@
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
     const MEMORY_STACK_VERSION = 4;
     const RUN_LOG_VERSION = 1;
+    const RUN_LOG_BODY_VERSION = 1;
+    const RUN_LOG_BODY_INLINE_LIMIT = 1000;
+    const RUN_LOG_BODY_PREVIEW_CHARS = 700;
     const PRE_REUSE_VERSION = 1;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
     const SETTINGS_UI_ID = 'risu-agents-settings';
@@ -1796,12 +1799,84 @@
       }
       try {
         run.updatedAt = Date.now();
-        await Risuai.pluginStorage.setItem(run.runKey, run);
+        const compactedRun = await compactRunLogForStorage(run, debugLog);
+        await Risuai.pluginStorage.setItem(run.runKey, compactedRun);
         if (debugLog) console.log(`Agents! run log saved: ${run.runKey}`);
         return true;
       } catch (err) {
         if (debugLog) console.log(`Agents! run log save failed: ${err.message}`);
         return false;
+      }
+    }
+
+    async function compactRunLogForStorage(run, debugLog) {
+      const compacted = {
+        ...run,
+        preResults: Array.isArray(run.preResults) ? run.preResults.map(result => ({ ...result })) : [],
+        postResults: Array.isArray(run.postResults) ? run.postResults.map(result => ({ ...result })) : [],
+        notes: Array.isArray(run.notes) ? run.notes.map(note => ({ ...note })) : [],
+      };
+      const updatedAt = run.updatedAt || Date.now();
+
+      await compactRunLogTextField(compacted, 'settingBlocks', run, 'settingBlocks', updatedAt, debugLog);
+      await compactRunLogTextField(compacted, 'finalResponse', run, 'finalResponse', updatedAt, debugLog);
+
+      for (let idx = 0; idx < compacted.preResults.length; idx += 1) {
+        const result = compacted.preResults[idx];
+        await compactRunLogTextField(result, 'content', run, `preResults.${idx}.content`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'rawOutput', run, `preResults.${idx}.rawOutput`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'memoryPrevious', run, `preResults.${idx}.memoryPrevious`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'memoryUpdate', run, `preResults.${idx}.memoryUpdate`, updatedAt, debugLog);
+      }
+
+      for (let idx = 0; idx < compacted.postResults.length; idx += 1) {
+        const result = compacted.postResults[idx];
+        await compactRunLogTextField(result, 'inputResponse', run, `postResults.${idx}.inputResponse`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'outputResponse', run, `postResults.${idx}.outputResponse`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'rawOutput', run, `postResults.${idx}.rawOutput`, updatedAt, debugLog);
+      }
+
+      return compacted;
+    }
+
+    async function compactRunLogTextField(holder, field, run, fieldPath, updatedAt, debugLog) {
+      if (!holder || holder[field] === undefined || holder[field] === null) return;
+      const value = String(holder[field]);
+      if (value.length < RUN_LOG_BODY_INLINE_LIMIT) return;
+
+      const bodyKey = runLogBodyKey(run, fieldPath);
+      if (!bodyKey) return;
+
+      await Risuai.pluginStorage.setItem(bodyKey, {
+        version: RUN_LOG_BODY_VERSION,
+        runKey: run.runKey,
+        fieldPath,
+        value,
+        chars: value.length,
+        updatedAt,
+      });
+      delete holder[field];
+      holder[`${field}Preview`] = value.slice(0, RUN_LOG_BODY_PREVIEW_CHARS);
+      holder[`${field}Chars`] = value.length;
+      holder[`${field}BodyKey`] = bodyKey;
+      if (debugLog) console.log(`Agents! run log body saved: ${fieldPath} (${value.length} chars)`);
+    }
+
+    function runLogBodyKey(run, fieldPath) {
+      if (!run?.chatKey) return '';
+      return `${'risu_agents_' + 'run_body_v'}${RUN_LOG_BODY_VERSION}:${run.characterId || 'unknown-character'}:${run.chatKey}:${sanitizeMemoryKeyPart(fieldPath)}`;
+    }
+
+    async function loadRunLogBodyValue(bodyKey, debugLog) {
+      if (!bodyKey) return '';
+      try {
+        const raw = await Risuai.pluginStorage.getItem(bodyKey);
+        return raw && typeof raw === 'object' && raw !== null
+          ? String(raw.value || '')
+          : String(raw || '');
+      } catch (err) {
+        if (debugLog) console.log(`Agents! run log body load failed: ${err.message}`);
+        return '';
       }
     }
 
@@ -2413,6 +2488,17 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
           const targetAgent = findAgentById(pipeline, event.currentTarget.getAttribute('data-memory-stack-agent-id'));
           if (targetAgent) await openMemoryStackModal(targetAgent, conf);
         });
+        root.querySelectorAll('[data-run-log-body-key]').forEach(button => {
+          button.addEventListener('click', async (event) => {
+            const key = event.currentTarget.getAttribute('data-run-log-body-key');
+            const targetId = event.currentTarget.getAttribute('data-run-log-body-target');
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!key || !target) return;
+            target.innerHTML = '<pre>전문을 불러오는 중...</pre>';
+            const value = await loadRunLogBodyValue(key, conf?.debugLog);
+            target.innerHTML = `<pre>${escHtml(value || '(본문 없음)')}</pre>`;
+          });
+        });
       }
     }
 
@@ -2512,15 +2598,15 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
 
       if (agent.mode === 'post') {
         return `<h2>${escHtml(agent.name)}</h2>${meta}
-          ${detailBlockHtml('입력 응답', result.inputResponse || '(입력 응답 없음)')}
-          ${detailBlockHtml('수정 후 응답', result.outputResponse || '(수정 후 응답 없음)')}
+          ${runLogDetailBlockHtml('입력 응답', result, 'inputResponse', '(입력 응답 없음)')}
+          ${runLogDetailBlockHtml('수정 후 응답', result, 'outputResponse', '(수정 후 응답 없음)')}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
 
       return `<h2>${escHtml(agent.name)}</h2>${meta}
         ${memoryButton}
-        ${detailBlockHtml('생성된 Note', result.content || '(노트 없음)')}
-        ${detailBlockHtml('Raw Output', result.rawOutput || result.content || '(원본 출력 없음)')}
+        ${runLogDetailBlockHtml('생성된 Note', result, 'content', '(노트 없음)')}
+        ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', runLogFieldValue(result, 'content', '(원본 출력 없음)'))}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
     }
 
@@ -2627,6 +2713,32 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
 
     function detailBlockHtml(title, text) {
       return `<div class="detail-block"><h3>${escHtml(title)}</h3><pre>${escHtml(text)}</pre></div>`;
+    }
+
+    function runLogFieldValue(source, field, fallback = '') {
+      if (source?.[field] !== undefined && source?.[field] !== null) return String(source[field]);
+      const preview = source?.[`${field}Preview`];
+      if (preview !== undefined && preview !== null) return String(preview);
+      return String(fallback || '');
+    }
+
+    function runLogDetailBlockHtml(title, source, field, fallback = '') {
+      const bodyKey = source?.[`${field}BodyKey`];
+      const chars = source?.[`${field}Chars`];
+      if (!bodyKey) {
+        return detailBlockHtml(title, runLogFieldValue(source, field, fallback));
+      }
+
+      const preview = runLogFieldValue(source, field, fallback);
+      const targetId = `run-log-body-${sanitizeMemoryKeyPart(`${source?.id || source?.name || title}-${field}`)}`;
+      const meta = Number.isFinite(Number(chars)) ? `<div class="metric-sub">전문 ${escHtml(chars)}자</div>` : '';
+      return `<div class="detail-block">
+        <h3>${escHtml(title)}</h3>
+        ${meta}
+        <pre>${escHtml(preview || '(미리보기 없음)')}</pre>
+        <div class="detail-actions"><button class="ghost" data-run-log-body-key="${escHtml(bodyKey)}" data-run-log-body-target="${escHtml(targetId)}">전문 보기</button></div>
+        <div id="${escHtml(targetId)}"></div>
+      </div>`;
     }
 
     function buildLiteUI(conf, pipeline) {
