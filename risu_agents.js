@@ -31,12 +31,17 @@
     const DEFAULT_AGENT_PROVIDER = 'ollama';
     const DEFAULT_AGENT_BASE_URL = 'https://ollama.com/v1';
     const DEFAULT_AGENT_MODEL = 'gemini-3-flash-preview:cloud';
-    const DEFAULT_MODEL_PRESET_ID = 'preset-default-ollama';
+    const MASKED_SECRET = '*****';
+    const DEFAULT_OLLAMA_GEMINI_PRESET_ID = 'preset-default-ollama-gemini-3-flash';
+    const DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID = 'preset-default-ollama-deepseek-v4-flash';
+    const DEFAULT_MODEL_PRESET_ID = DEFAULT_OLLAMA_GEMINI_PRESET_ID;
     const DEFAULT_PROVIDER_ORDER = ['ollama', 'openai', 'claude', 'google', 'vertex-ai'];
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
+    const MEMORY_STACK_VERSION = 3;
     const RUN_LOG_VERSION = 1;
+    const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
@@ -63,7 +68,7 @@
       const maxTokens = parseOptionalInt(await Risuai.getArgument('agents_max_tokens'));
       const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
       const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), true);
-      const legacy = {
+      const fallbackConfig = {
         provider,
         baseUrl,
         model,
@@ -79,7 +84,7 @@
       );
       const modelPresets = parseModelPresets(
         await Risuai.getArgument('agents_model_presets_json'),
-        legacy,
+        fallbackConfig,
         debugLog,
       );
       const apiKey = getProviderApiKey(providerKeys, provider) || configuredApiKey;
@@ -91,7 +96,7 @@
         providerKeys,
         modelPresets,
         model,
-        temperature: legacy.temperature,
+        temperature: fallbackConfig.temperature,
         maxTokens,
         window,
         debugLog,
@@ -119,7 +124,7 @@
             Object.keys(parsed).forEach((key) => {
               const provider = normalizeProviderValue(key);
               const value = String(parsed[key] || '');
-              if (provider && value) keys[provider] = value;
+              if (provider && value && value !== MASKED_SECRET) keys[provider] = value;
             });
           }
         } catch (err) {
@@ -129,46 +134,48 @@
 
       const configuredKey = String(configuredApiKey || '');
       const normalizedConfiguredProvider = normalizeProviderValue(configuredProvider || DEFAULT_AGENT_PROVIDER);
-      if (configuredKey && normalizedConfiguredProvider && !keys[normalizedConfiguredProvider]) {
+      if (configuredKey && configuredKey !== MASKED_SECRET && normalizedConfiguredProvider && !keys[normalizedConfiguredProvider]) {
         keys[normalizedConfiguredProvider] = configuredKey;
       }
       return keys;
     }
 
-    function parseModelPresets(raw, legacy, debugLog) {
+    function parseModelPresets(raw, fallbackConfig, debugLog) {
       if (raw) {
         try {
           const parsed = JSON.parse(String(raw));
           const source = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.presets) ? parsed.presets : [];
-          const presets = normalizeModelPresets(source, legacy);
+          const presets = normalizeModelPresets(source, fallbackConfig);
           if (presets.length > 0) return presets;
         } catch (err) {
           if (debugLog) console.log(`Agents! model preset JSON parse failed: ${err.message}`);
         }
       }
-      return defaultModelPresets(legacy);
+      return defaultModelPresets(fallbackConfig);
     }
 
-    function normalizeModelPresets(source, legacy) {
+    function normalizeModelPresets(source, fallbackConfig) {
       const used = new Set();
       const presets = (Array.isArray(source) ? source : [])
-        .map((preset, idx) => normalizeModelPreset(preset, legacy, idx, used))
+        .map((preset, idx) => normalizeModelPreset(preset, fallbackConfig, idx, used))
         .filter(Boolean);
-      return ensureDefaultProviderPresets(presets, legacy, used);
+      return ensureDefaultProviderPresets(presets, fallbackConfig, used);
     }
 
-    function normalizeModelPreset(preset, legacy, idx, used) {
-      const fallback = legacy || {};
+    function normalizeModelPreset(preset, fallbackConfig, idx, used) {
+      const fallback = fallbackConfig || {};
       const baseId = String(preset?.id || (idx === 0 ? DEFAULT_MODEL_PRESET_ID : makeAgentId('preset')));
       let id = baseId;
       while (used.has(id)) id = `${baseId}-${used.size + 1}`;
       used.add(id);
 
+      const provider = normalizeProviderValue(preset?.provider || fallback.provider || DEFAULT_AGENT_PROVIDER);
+      const defaults = providerDefaults(provider);
       return {
         id,
         name: String(preset?.name || (idx === 0 ? 'Ollama' : `Model Preset ${idx + 1}`)),
-        provider: normalizeProviderValue(preset?.provider || fallback.provider || DEFAULT_AGENT_PROVIDER),
-        baseUrl: normalizeUrl(preset?.baseUrl || fallback.baseUrl || DEFAULT_AGENT_BASE_URL),
+        provider,
+        baseUrl: normalizeUrl(defaults?.baseUrl || preset?.baseUrl || fallback.baseUrl || DEFAULT_AGENT_BASE_URL),
         model: String(preset?.model || fallback.model || DEFAULT_AGENT_MODEL),
         temperature: preset?.temperature === null || preset?.temperature === undefined || preset?.temperature === ''
           ? String(fallback.temperature ?? 0.7)
@@ -180,15 +187,45 @@
       };
     }
 
-    function defaultModelPreset(legacy) {
-      return defaultModelPresets(legacy)[0];
+    function defaultModelPreset(fallbackConfig) {
+      return defaultModelPresets(fallbackConfig)[0];
     }
 
-    function defaultModelPresets(legacy) {
-      return DEFAULT_PROVIDER_ORDER.map((provider, idx) => defaultModelPresetForProvider(provider, legacy, idx));
+    function defaultModelPresets(fallbackConfig) {
+      const presets = [
+        defaultOllamaModelPreset(
+          DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+          'Ollama Gemini 3 Flash',
+          'gemini-3-flash-preview:cloud',
+          fallbackConfig,
+        ),
+        defaultOllamaModelPreset(
+          DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
+          'Ollama DeepSeek V4 Flash',
+          'deepseek-v4-flash:cloud',
+          fallbackConfig,
+        ),
+      ];
+      DEFAULT_PROVIDER_ORDER
+        .filter(provider => provider !== DEFAULT_AGENT_PROVIDER)
+        .forEach((provider, idx) => presets.push(defaultModelPresetForProvider(provider, fallbackConfig, idx)));
+      return presets;
     }
 
-    function defaultModelPresetForProvider(provider, legacy, idx = 0) {
+    function defaultOllamaModelPreset(id, name, model, fallbackConfig) {
+      return {
+        id,
+        name,
+        provider: DEFAULT_AGENT_PROVIDER,
+        baseUrl: normalizeUrl(DEFAULT_AGENT_BASE_URL),
+        model,
+        temperature: String(fallbackConfig?.temperature ?? 0.7),
+        maxTokens: fallbackConfig?.maxTokens === null || fallbackConfig?.maxTokens === undefined ? '' : String(fallbackConfig.maxTokens),
+        contextWindow: String(fallbackConfig?.window || 10),
+      };
+    }
+
+    function defaultModelPresetForProvider(provider, fallbackConfig, idx = 0) {
       const normalized = normalizeProviderValue(provider || DEFAULT_AGENT_PROVIDER);
       const defaults = providerDefaults(normalized) || providerDefaults(DEFAULT_AGENT_PROVIDER);
       return {
@@ -197,20 +234,39 @@
         provider: normalized,
         baseUrl: normalizeUrl(defaults.baseUrl),
         model: String(defaults.model),
-        temperature: String(legacy?.temperature ?? 0.7),
-        maxTokens: legacy?.maxTokens === null || legacy?.maxTokens === undefined ? '' : String(legacy.maxTokens),
-        contextWindow: String(legacy?.window || 10),
+        temperature: String(fallbackConfig?.temperature ?? 0.7),
+        maxTokens: fallbackConfig?.maxTokens === null || fallbackConfig?.maxTokens === undefined ? '' : String(fallbackConfig.maxTokens),
+        contextWindow: String(fallbackConfig?.window || 10),
       };
     }
 
-    function ensureDefaultProviderPresets(presets, legacy, used = null) {
+    function ensureDefaultProviderPresets(presets, fallbackConfig, used = null) {
       const result = Array.isArray(presets) ? presets.slice() : [];
       const idSet = used || new Set(result.map(preset => preset.id));
       const existingProviders = new Set(result.map(preset => normalizeProviderValue(preset.provider)));
 
-      DEFAULT_PROVIDER_ORDER.forEach((provider, idx) => {
+      [
+        defaultOllamaModelPreset(
+          DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+          'Ollama Gemini 3 Flash',
+          'gemini-3-flash-preview:cloud',
+          fallbackConfig,
+        ),
+        defaultOllamaModelPreset(
+          DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
+          'Ollama DeepSeek V4 Flash',
+          'deepseek-v4-flash:cloud',
+          fallbackConfig,
+        ),
+      ].forEach((preset) => {
+        if (idSet.has(preset.id)) return;
+        result.push(preset);
+        idSet.add(preset.id);
+      });
+
+      DEFAULT_PROVIDER_ORDER.filter(provider => provider !== DEFAULT_AGENT_PROVIDER).forEach((provider, idx) => {
         if (existingProviders.has(provider)) return;
-        const preset = defaultModelPresetForProvider(provider, legacy, idx);
+        const preset = defaultModelPresetForProvider(provider, fallbackConfig, idx);
         let id = preset.id;
         while (idSet.has(id)) id = `${preset.id}-${idSet.size + 1}`;
         preset.id = id;
@@ -464,6 +520,123 @@
       return chats[page] || chats[0] || null;
     }
 
+    async function loadActualChatContext(_requestMessages, debugLog) {
+      const fallback = {
+        available: false,
+        messages: [],
+        source: 'chat-message-unavailable',
+        error: '',
+        messageCount: 0,
+        storedMessageCount: 0,
+        appendedCurrentUser: false,
+        trimmedToCurrentUser: false,
+      };
+
+      const errors = [];
+      let characterIndex = null;
+      let chatIndex = null;
+      try {
+        characterIndex = await Risuai.getCurrentCharacterIndex();
+      } catch (err) {
+        errors.push(`getCurrentCharacterIndex: ${err.message}`);
+      }
+      try {
+        chatIndex = await Risuai.getCurrentChatIndex();
+      } catch (err) {
+        errors.push(`getCurrentChatIndex: ${err.message}`);
+      }
+
+      if (!Number.isFinite(Number(characterIndex)) || !Number.isFinite(Number(chatIndex))) {
+        return {
+          ...fallback,
+          error: errors.join('; ') || 'current character/chat index unavailable',
+        };
+      }
+
+      let chat = null;
+      try {
+        chat = await Risuai.getChatFromIndex(parseInt(characterIndex, 10), parseInt(chatIndex, 10));
+      } catch (err) {
+        return {
+          ...fallback,
+          error: `getChatFromIndex: ${err.message}`,
+          characterIndex,
+          chatIndex,
+        };
+      }
+
+      if (!chat) {
+        return {
+          ...fallback,
+          error: 'current chat object not found',
+          characterIndex,
+          chatIndex,
+        };
+      }
+
+      const rawMessages = chat?.message;
+      if (!Array.isArray(rawMessages)) {
+        return {
+          ...fallback,
+          error: `chat.message array not found; keys=${objectKeysPreview(chat)}`,
+          characterIndex,
+          chatIndex,
+        };
+      }
+
+      const normalizedMessages = rawMessages
+        .map(normalizeStoredChatMessage)
+        .filter(Boolean);
+      const lastUserIndex = findLastIndex(normalizedMessages, msg => msg.role === 'user');
+      if (lastUserIndex < 0) {
+        return {
+          ...fallback,
+          source: 'chat.message',
+          error: 'user message not found in chat.message',
+          characterIndex,
+          chatIndex,
+          storedMessageCount: normalizedMessages.length,
+        };
+      }
+
+      const trimmedToCurrentUser = lastUserIndex < normalizedMessages.length - 1;
+      const messages = normalizedMessages.slice(0, lastUserIndex + 1);
+
+      return {
+        available: true,
+        messages,
+        source: `chat.message${trimmedToCurrentUser ? '+trimmed-to-last-user' : ''}`,
+        error: '',
+        characterIndex,
+        chatIndex,
+        messageCount: messages.length,
+        storedMessageCount: normalizedMessages.length,
+        appendedCurrentUser: false,
+        trimmedToCurrentUser,
+      };
+    }
+
+    function normalizeStoredChatMessage(item) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const rawRole = String(item.role || '').trim().toLowerCase().replace(/[_\s-]+/g, '');
+      const role = rawRole === 'user'
+        ? 'user'
+        : ['assistant', 'char', 'character', 'bot', 'ai', 'model'].includes(rawRole)
+          ? 'assistant'
+          : '';
+      if (!role) return null;
+      const content = typeof item.data === 'string' || typeof item.data === 'number'
+        ? String(item.data).trim()
+        : '';
+      return content ? { role, content } : null;
+    }
+
+    function objectKeysPreview(value) {
+      return value && typeof value === 'object'
+        ? Object.keys(value).slice(0, 12).join(',')
+        : '';
+    }
+
     function getSelectedPersona(db) {
       const personas = Array.isArray(db?.personas) ? db.personas : [];
       if (!personas.length) return null;
@@ -602,42 +775,92 @@
         row: 0,
         column: 0,
         name: '세계관 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
         systemPrompt:
           '당신은 세계관 일관성 에이전트입니다.\n' +
-          '주어진 설정과 대화 히스토리를 바탕으로 현재 씬의 세계관 주의사항과 보강 정보를 작성하세요.\n\n' +
-          '포함할 항목:\n' +
-          '- 현재 씬/배경 정보\n' +
-          '- 활성화된 세계관 규칙\n' +
-          '- 주의해야 할 기확립 설정\n' +
-          '- 세계관 보강 정보',
+          '현재 요청을 세계관과 배경 설정 관점에서만 검토하고, 메인 모델이 참고할 짧은 메모를 작성하세요.\n' +
+          '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+          '[장면 환경]\n' +
+          '- 장소, 시간대, 물리적 환경, 사회적 분위기\n\n' +
+          '[적용되는 세계관 규칙]\n' +
+          '- 기술, 마법, 제도, 문화, 금기, 능력의 한계\n\n' +
+          '[기확립 설정]\n' +
+          '- 이번 응답에서 지켜야 할 기존 사실과 조건',
       },
       {
         id: 'agent-plot',
         row: 1,
         column: 0,
         name: '플롯 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
         systemPrompt:
           '당신은 플롯 관리 에이전트입니다.\n' +
-          '설정, 이전 에이전트 메모, 대화 히스토리를 바탕으로 현재 서사 흐름을 분석하고 이번 씬의 플롯 방향을 제시하세요.\n\n' +
-          '포함할 항목:\n' +
-          '- 현재 아크/스토리 진행 상황\n' +
-          '- 이번 씬 목적\n' +
-          '- 권장 전개 방향\n' +
-          '- 유지해야 할 복선/미공개 정보',
+          '현재 서사 흐름, 장면 목적, 이번 장면에서 다룰 복선을 관리하는 메모를 작성하세요.\n' +
+          '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+          '[현재 서사 위치]\n' +
+          '- 현재 아크, 직전 사건, 장면이 이어받은 상황\n\n' +
+          '[이번 장면의 목적]\n' +
+          '- 이번 응답이 서사적으로 진행하거나 보존해야 할 일\n\n' +
+          '[긴장/갈등 포인트]\n' +
+          '- 유지해야 할 갈등, 압박, 의문, 감정적 긴장\n\n' +
+          '[이번 장면의 복선 처리]\n' +
+          '- 이번 응답에서 회수, 암시, 강화, 또는 의도적으로 보류해야 할 복선만 작성\n\n' +
+          '[권장 전개 초점]\n' +
+          '- 다음 응답에서 자연스럽게 밀어줄 방향과 속도',
+        memoryEnabled: true,
+        memoryInstruction:
+          '이 채팅의 장기 플롯 기억을 갱신하세요. 이후 턴에서 다시 참고해야 할 모든 복선, 미해결 질문, 장기 목표, 약속된 사건, 아직 공개되지 않은 정보를 유지합니다. 새로 등장한 복선은 추가하고, 이미 회수되었거나 더 이상 유효하지 않은 항목은 상태를 갱신하세요. 전체 복선 목록은 짧은 이름으로 압축해 컴마로 구분해 저장하세요.',
+        memoryFormat:
+          '[전체 복선 목록]\n' +
+          '복선1, 복선2, 복선3\n\n' +
+          '[활성 복선 상세]\n' +
+          '- 항목: 현재 상태 / 관련 인물 / 마지막 근거\n\n' +
+          '[미해결 질문]\n' +
+          '- 질문: 현재 단서 / 다음에 확인할 점\n\n' +
+          '[장기 목표와 약속]\n' +
+          '- 목표 또는 약속: 관련 인물 / 진행 상태',
       },
       {
         id: 'agent-character',
         row: 2,
         column: 0,
         name: '캐릭터 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
         systemPrompt:
           '당신은 등장인물 에이전트입니다.\n' +
-          '설정과 이전 에이전트 메모를 바탕으로 이번 씬 캐릭터들의 성격과 말투를 정리하세요.\n\n' +
-          '포함할 항목:\n' +
-          '- 주요 캐릭터 성격/말투 특성\n' +
-          '- 현재 캐릭터 심리 상태\n' +
-          '- OOC(Out of Character) 주의사항\n' +
-          '- 등장 예정 캐릭터 안내',
+          '현재 장면에 등장하거나 직접 영향을 받는 인물들의 반응 기준을 정리하세요.\n' +
+          '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+          '[캐릭터별 현재 상태]\n' +
+          '- 이름: 감정, 몸 상태, 처한 상황\n\n' +
+          '[캐릭터별 욕구/목표]\n' +
+          '- 이름: 지금 얻고 싶어 하는 것, 피하려는 것\n\n' +
+          '[관계성 동역학]\n' +
+          '- 인물 사이의 신뢰, 거리감, 긴장, 권력 관계\n' +
+          '- 나이 차이, 가족/선후배/상하 관계, 언니/오빠/형/누나 같은 호칭 관계\n' +
+          '- 존댓말/반말 여부와 호칭이 달라질 수 있는 조건\n\n' +
+          '[행동 기준]\n' +
+          '- 인물별 태도, 몸짓, 습관, 감정이 행동으로 드러나는 방식\n\n' +
+          '[자연스러운 반응 범위]\n' +
+          '- 이번 응답에서 납득 가능한 감정 변화와 행동 폭',
+      },
+      {
+        id: 'agent-dialogue',
+        row: 3,
+        column: 0,
+        name: '대사 에이전트',
+        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        systemPrompt:
+          '당신은 대사와 말투 에이전트입니다.\n' +
+          '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
+          '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+          '[캐릭터별 발화 기준]\n' +
+          '- 이름: 호칭, 존댓말/반말, 문장 길이, 어휘 수준, 자주 쓰는 어미\n\n' +
+          '[관계별 호칭과 말투]\n' +
+          '- A -> B: 부르는 호칭, 높임/반말, 친밀도나 거리감이 드러나는 방식\n\n' +
+          '[감정별 말투 변화]\n' +
+          '- 이름: 평소 / 화났을 때 / 당황했을 때 / 친밀할 때의 말투 차이\n\n' +
+          '[짧은 어조 샘플]\n' +
+          '- 이름: 1문장 이하의 참고용 샘플. 장면을 진행하는 완성 대사가 아니라 어조 참고용으로만 작성',
       },
     ];
 
@@ -660,7 +883,7 @@
       return normalizePipelineConfig(pipeline);
     }
 
-    function normalizePipelineConfig(raw, modelPresets = null, legacy = null) {
+    function normalizePipelineConfig(raw, modelPresets = null) {
       const fallback = createEmptyPipeline();
       const sourceRows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
 
@@ -668,7 +891,7 @@
         const sourceRow = sourceRows.find(r => Number(r?.row) === row) || sourceRows[row] || {};
         const agents = Array.isArray(sourceRow?.agents) ? sourceRow.agents : [];
         const normalized = agents
-          .map((agent, idx) => normalizeAgent(agent, row, idx, modelPresets, legacy))
+          .map((agent, idx) => normalizeAgent(agent, row, idx, modelPresets))
           .filter(agent => agent.row !== MAIN_ROW_INDEX)
           .sort((a, b) => a.column - b.column);
 
@@ -683,19 +906,19 @@
 
     async function getPipelineConfig(conf) {
       const raw = await Risuai.getArgument('agents_pipeline_json');
-      if (!raw) return normalizePipelineConfig(defaultPipelineConfig(), conf?.modelPresets, conf);
+      if (!raw) return normalizePipelineConfig(defaultPipelineConfig(), conf?.modelPresets);
 
       try {
-        return normalizePipelineConfig(JSON.parse(String(raw)), conf?.modelPresets, conf);
+        return normalizePipelineConfig(JSON.parse(String(raw)), conf?.modelPresets);
       } catch (err) {
         if (conf?.debugLog) console.log(`Agents! pipeline JSON parse failed: ${err.message}`);
         return defaultPipelineConfig();
       }
     }
 
-    function normalizeAgent(agent, row, column, modelPresets = null, legacy = null) {
+    function normalizeAgent(agent, row, column, modelPresets = null) {
       const mode = row < MAIN_ROW_INDEX ? 'pre' : 'post';
-      const modelPresetId = resolveAgentPresetId(agent, modelPresets, legacy);
+      const modelPresetId = resolveAgentPresetId(agent, modelPresets);
       return {
         id: String(agent?.id || makeAgentId(mode)),
         name: String(agent?.name || (mode === 'pre' ? '새 노트 에이전트' : '새 후처리 에이전트')),
@@ -718,7 +941,7 @@
       };
     }
 
-    function resolveAgentPresetId(agent, modelPresets, legacy) {
+    function resolveAgentPresetId(agent, modelPresets) {
       const presets = Array.isArray(modelPresets) ? modelPresets : [];
       if (agent?.modelPresetId && presets.some(preset => preset.id === agent.modelPresetId)) {
         return String(agent.modelPresetId);
@@ -726,42 +949,7 @@
       if (agent?.modelPresetId && presets.length === 0) {
         return String(agent.modelPresetId);
       }
-      if (hasLegacyAgentModelOverride(agent) && presets.length > 0) {
-        return findOrCreateLegacyAgentPreset(agent, presets, legacy).id;
-      }
       return presets[0]?.id || DEFAULT_MODEL_PRESET_ID;
-    }
-
-    function hasLegacyAgentModelOverride(agent) {
-      return Boolean(agent?.provider || agent?.baseUrl || agent?.model || agent?.temperature || agent?.maxTokens || agent?.contextWindow);
-    }
-
-    function findOrCreateLegacyAgentPreset(agent, presets, legacy) {
-      const candidate = {
-        id: `preset-migrated-${String(agent.id || makeAgentId('agent')).replace(/[^a-zA-Z0-9_-]/g, '-')}`,
-        name: `${String(agent.name || 'Migrated Agent')} Model`,
-        provider: normalizeProviderValue(agent.provider || legacy?.provider || DEFAULT_AGENT_PROVIDER),
-        baseUrl: normalizeUrl(agent.baseUrl || legacy?.baseUrl || DEFAULT_AGENT_BASE_URL),
-        model: String(agent.model || legacy?.model || DEFAULT_AGENT_MODEL),
-        temperature: agent.temperature === null || agent.temperature === undefined || agent.temperature === ''
-          ? String(legacy?.temperature ?? 0.7)
-          : String(agent.temperature),
-        maxTokens: agent.maxTokens === null || agent.maxTokens === undefined ? '' : String(agent.maxTokens),
-        contextWindow: agent.contextWindow === null || agent.contextWindow === undefined || agent.contextWindow === ''
-          ? String(legacy?.window || 10)
-          : String(agent.contextWindow),
-      };
-      const existing = presets.find(preset =>
-        preset.provider === candidate.provider &&
-        normalizeUrl(preset.baseUrl) === candidate.baseUrl &&
-        preset.model === candidate.model &&
-        String(preset.temperature) === candidate.temperature &&
-        String(preset.maxTokens || '') === candidate.maxTokens &&
-        String(preset.contextWindow || '') === candidate.contextWindow
-      );
-      if (existing) return existing;
-      presets.push(candidate);
-      return candidate;
     }
 
     function defaultSystemPromptForMode(mode) {
@@ -930,17 +1118,28 @@
     }
 
     async function getAgentMemoryScope(debugLog) {
+      const errors = [];
       let character = null;
       try {
         character = await Risuai.getCharacter();
       } catch (err) {
+        errors.push(`getCharacter: ${err.message}`);
         if (debugLog) console.log(`Agents! memory: getCharacter failed: ${err.message}`);
+      }
+
+      let characterIndex = null;
+      try {
+        characterIndex = await Risuai.getCurrentCharacterIndex();
+      } catch (err) {
+        errors.push(`getCurrentCharacterIndex: ${err.message}`);
+        if (debugLog) console.log(`Agents! memory: getCurrentCharacterIndex failed: ${err.message}`);
       }
 
       let chatIndex = null;
       try {
         chatIndex = await Risuai.getCurrentChatIndex();
       } catch (err) {
+        errors.push(`getCurrentChatIndex: ${err.message}`);
         if (debugLog) console.log(`Agents! memory: getCurrentChatIndex failed: ${err.message}`);
       }
 
@@ -948,50 +1147,314 @@
         chatIndex = Number.isInteger(character?.chatPage) ? character.chatPage : 0;
       }
 
+      const normalizedCharacterIndex = Number.isFinite(Number(characterIndex))
+        ? Math.max(0, parseInt(characterIndex, 10) || 0)
+        : null;
       const normalizedChatIndex = Math.max(0, parseInt(chatIndex, 10) || 0);
       const chats = Array.isArray(character?.chats) ? character.chats : [];
-      const chat = chats[normalizedChatIndex] || getCurrentCharacterChat(character);
+      let chat = null;
+      if (normalizedCharacterIndex !== null && Number.isFinite(Number(chatIndex))) {
+        try {
+          chat = await Risuai.getChatFromIndex(normalizedCharacterIndex, normalizedChatIndex);
+          if (!chat) errors.push('getChatFromIndex: current chat object not found');
+        } catch (err) {
+          errors.push(`getChatFromIndex: ${err.message}`);
+          if (debugLog) console.log(`Agents! memory: getChatFromIndex failed: ${err.message}`);
+        }
+      } else {
+        errors.push('current character/chat index unavailable');
+      }
+
+      const displayChat = chat || chats[normalizedChatIndex] || getCurrentCharacterChat(character);
+      const chatIdentity = await ensureChatScopeIdentity(chat, normalizedCharacterIndex, normalizedChatIndex, debugLog, errors);
       const characterId = firstNonEmpty(character?.chaId, character?.id, character?.name, 'unknown-character');
       const characterName = firstNonEmpty(character?.name, '(알 수 없는 캐릭터)');
-      const chatName = firstNonEmpty(chat?.name, chat?.title, chat?.chatName, `Chat ${normalizedChatIndex + 1}`);
+      const chatName = firstNonEmpty(displayChat?.name, displayChat?.title, displayChat?.chatName, `Chat ${normalizedChatIndex + 1}`);
+      const chatScopeAvailable = Boolean(chatIdentity.key);
+      const chatScopeError = chatScopeAvailable ? '' : errors.join('; ') || 'chat id unavailable';
       return {
         characterId: sanitizeMemoryKeyPart(characterId),
+        characterIndex: normalizedCharacterIndex === null ? '' : String(normalizedCharacterIndex),
         chatIndex: String(normalizedChatIndex),
+        chatKey: chatIdentity.key ? sanitizeMemoryKeyPart(chatIdentity.key) : '',
+        chatKeyRaw: chatIdentity.key || '',
+        chatKeyDisplay: chatIdentity.key ? formatChatKeyPreview(chatIdentity.key) : '',
+        chatKeySource: chatIdentity.source || '',
+        chatScopeAvailable,
+        chatScopeError,
         characterName,
         chatName,
       };
+    }
+
+    async function ensureChatScopeIdentity(chat, characterIndex, chatIndex, debugLog, errors) {
+      const existingId = firstNonEmpty(chat?.id);
+      if (existingId) return { key: existingId, source: 'chat.id' };
+
+      const pluginId = firstNonEmpty(chat?.[PLUGIN_CHAT_ID_FIELD]);
+      if (pluginId) return { key: pluginId, source: PLUGIN_CHAT_ID_FIELD };
+
+      if (!chat || characterIndex === null || !Number.isFinite(Number(chatIndex))) {
+        return { key: '', source: '' };
+      }
+
+      const generatedId = makeAgentId('chat');
+      try {
+        const nextChat = Array.isArray(chat) ? [...chat] : { ...chat };
+        nextChat[PLUGIN_CHAT_ID_FIELD] = generatedId;
+        await Risuai.setChatToIndex(characterIndex, chatIndex, nextChat);
+        if (debugLog) console.log(`Agents! memory: generated ${PLUGIN_CHAT_ID_FIELD} for chat scope`);
+        return { key: generatedId, source: `${PLUGIN_CHAT_ID_FIELD}:generated` };
+      } catch (err) {
+        errors.push(`setChatToIndex: ${err.message}`);
+        if (debugLog) console.log(`Agents! memory: setChatToIndex failed while saving chat scope id: ${err.message}`);
+        return { key: '', source: '' };
+      }
     }
 
     function sanitizeMemoryKeyPart(value) {
       return encodeURIComponent(String(value || 'unknown'));
     }
 
+    function formatChatKeyPreview(value) {
+      const text = String(value || '').trim();
+      if (!text) return '';
+      return text.length <= 22 ? text : `${text.slice(0, 12)}...${text.slice(-6)}`;
+    }
+
     function agentMemoryKey(agent, scope) {
-      return `${'risu_agents_' + 'memory:'}${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}:${sanitizeMemoryKeyPart(agent.id)}`;
+      if (!scope?.chatKey) return '';
+      return `${'risu_agents_' + 'memory:'}${scope?.characterId || 'unknown-character'}:${scope.chatKey}:${sanitizeMemoryKeyPart(agent.id)}`;
     }
 
     function agentRunLogKey(scope) {
-      return `${'risu_agents_' + 'run:'}${scope?.characterId || 'unknown-character'}:${scope?.chatIndex || '0'}`;
+      if (!scope?.chatKey) return '';
+      return `${'risu_agents_' + 'run:'}${scope?.characterId || 'unknown-character'}:${scope.chatKey}`;
     }
 
-    async function loadAgentMemory(agent, scope, debugLog) {
+    function memoryChatMessages(messages) {
+      return (Array.isArray(messages) ? messages : [])
+        .filter(msg => msg?.role === 'user' || msg?.role === 'assistant')
+        .map(msg => ({
+          role: msg.role,
+          content: String(msg.content || ''),
+        }));
+    }
+
+    function memoryStateForMessages(messages, count = null) {
+      const chatMessages = memoryChatMessages(messages);
+      const messageCount = count === null
+        ? chatMessages.length
+        : Math.max(0, Math.min(chatMessages.length, parseInt(count, 10) || 0));
+      const selected = chatMessages.slice(0, messageCount);
+      return {
+        messageCount,
+        preview: memoryStatePreview(selected),
+      };
+    }
+
+    function memoryStatePreview(messages) {
+      const selected = Array.isArray(messages) ? messages : [];
+      if (!selected.length) return '대화 시작 전';
+      return selected
+        .slice(-2)
+        .map(msg => `${msg.role === 'user' ? '유저' : 'AI'}: ${String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 90)}`)
+        .join('\n');
+    }
+
+    function normalizeMemorySnapshot(snapshot, fallbackState = null) {
+      const value = String(snapshot?.value || '').trim();
+      if (!value) return null;
+      const state = fallbackState || {};
+      const messageCount = Number.isFinite(Number(snapshot?.messageCount))
+        ? Math.max(0, parseInt(snapshot.messageCount, 10) || 0)
+        : Number.isFinite(Number(state.messageCount))
+          ? Math.max(0, parseInt(state.messageCount, 10) || 0)
+          : 0;
+      return {
+        messageCount,
+        value,
+        updatedAt: Number(snapshot?.updatedAt) || Date.now(),
+        usedAt: Number(snapshot?.usedAt) || Number(snapshot?.updatedAt) || Date.now(),
+        preview: String(snapshot?.preview || state.preview || '대화 시작 전'),
+      };
+    }
+
+    function normalizeMemoryStore(raw, agent, scope) {
+      const base = {
+        version: MEMORY_STACK_VERSION,
+        agentId: agent.id,
+        agentName: agent.name,
+        characterId: scope?.characterId || 'unknown-character',
+        chatIndex: scope?.chatIndex || '0',
+        chatKey: scope?.chatKey || '',
+        chatKeyDisplay: scope?.chatKeyDisplay || '',
+        chatKeySource: scope?.chatKeySource || '',
+        pointer: -1,
+        snapshots: [],
+      };
+
+      if (raw && typeof raw === 'object' && Array.isArray(raw.snapshots)) {
+        const compacted = compactMemorySnapshots(raw.snapshots, parseInt(raw.pointer, 10));
+        return {
+          ...base,
+          ...raw,
+          version: MEMORY_STACK_VERSION,
+          agentId: agent.id,
+          agentName: agent.name,
+          characterId: scope?.characterId || raw.characterId || base.characterId,
+          chatIndex: scope?.chatIndex || raw.chatIndex || base.chatIndex,
+          chatKey: scope?.chatKey || raw.chatKey || base.chatKey,
+          chatKeyDisplay: scope?.chatKeyDisplay || raw.chatKeyDisplay || base.chatKeyDisplay,
+          chatKeySource: scope?.chatKeySource || raw.chatKeySource || base.chatKeySource,
+          pointer: compacted.pointer,
+          snapshots: compacted.snapshots,
+        };
+      }
+
+      const legacyValue = raw && typeof raw === 'object' && raw !== null
+        ? String(raw.value || '').trim()
+        : String(raw || '').trim();
+      if (!legacyValue) return base;
+
+      const baselineState = memoryStateForMessages([], 0);
+      const snapshot = normalizeMemorySnapshot({
+        value: legacyValue,
+        updatedAt: raw?.updatedAt,
+        usedAt: raw?.updatedAt,
+      }, {
+        ...baselineState,
+        preview: '기존 단일 기억에서 승격됨',
+      });
+      return {
+        ...base,
+        pointer: 0,
+        snapshots: snapshot ? [snapshot] : [],
+      };
+    }
+
+    function compactMemorySnapshots(sourceSnapshots, preferredPointer = -1) {
+      const normalized = (Array.isArray(sourceSnapshots) ? sourceSnapshots : [])
+        .map((snapshot, idx) => ({ snapshot: normalizeMemorySnapshot(snapshot), idx }))
+        .filter(item => item.snapshot);
+      const explicitNoPointer = Number(preferredPointer) === -1;
+      const hasPreferredPointer = Number.isFinite(Number(preferredPointer)) && Number(preferredPointer) >= 0;
+      const preferred = hasPreferredPointer
+        ? normalized.find(item => item.idx === preferredPointer)?.snapshot || null
+        : null;
+      const byCount = new Map();
+
+      normalized.forEach((item) => {
+        const count = item.snapshot.messageCount;
+        const existing = byCount.get(count);
+        if (!existing || shouldReplaceMemorySnapshot(existing, item, preferredPointer)) {
+          byCount.set(count, item);
+        }
+      });
+
+      const snapshots = [...byCount.values()]
+        .map(item => item.snapshot)
+        .sort((a, b) => a.messageCount - b.messageCount);
+      const preferredCount = preferred?.messageCount;
+      const pointer = explicitNoPointer
+        ? -1
+        : Number.isFinite(Number(preferredCount))
+          ? snapshots.findIndex(snapshot => snapshot.messageCount === preferredCount)
+          : snapshots.length - 1;
+      return {
+        snapshots,
+        pointer: snapshots.length && pointer >= 0 ? pointer : -1,
+      };
+    }
+
+    function shouldReplaceMemorySnapshot(existing, candidate, preferredPointer) {
+      if (candidate.idx === preferredPointer) return true;
+      if (existing.idx === preferredPointer) return false;
+      const existingTime = Number(existing.snapshot.usedAt || existing.snapshot.updatedAt) || 0;
+      const candidateTime = Number(candidate.snapshot.usedAt || candidate.snapshot.updatedAt) || 0;
+      return candidateTime >= existingTime;
+    }
+
+    function findMemorySnapshotIndexForCount(store, messageCount) {
+      const snapshots = Array.isArray(store?.snapshots) ? store.snapshots : [];
+      const count = Math.max(0, parseInt(messageCount, 10) || 0);
+      let found = -1;
+      snapshots.forEach((snapshot, idx) => {
+        if (Number(snapshot.messageCount) <= count) found = idx;
+      });
+      return found;
+    }
+
+    function currentMemorySnapshot(store) {
+      const snapshots = Array.isArray(store?.snapshots) ? store.snapshots : [];
+      const pointer = parseInt(store?.pointer, 10);
+      return Number.isFinite(pointer) && pointer >= 0 ? snapshots[pointer] || null : null;
+    }
+
+    async function persistMemoryStore(key, store, debugLog) {
+      try {
+        await Risuai.pluginStorage.setItem(key, store);
+        return true;
+      } catch (err) {
+        if (debugLog) console.log(`Agents! memory stack save failed: ${err.message}`);
+        return false;
+      }
+    }
+
+    async function loadAgentMemory(agent, scope, messages, debugLog) {
       if (!agent.memoryEnabled || agent.mode !== 'pre') {
         return { enabled: false, value: '', key: '' };
       }
 
       const key = agentMemoryKey(agent, scope || {});
+      const currentState = memoryStateForMessages(messages);
+      if (!key) {
+        if (debugLog) console.log(`Agents! memory load skipped (${agent.name}): chat scope unavailable`);
+        return {
+          enabled: true,
+          key: '',
+          value: '',
+          store: normalizeMemoryStore(null, agent, scope || {}),
+          currentState,
+          pointer: -1,
+          characterId: scope?.characterId || 'unknown-character',
+          chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
+          chatScopeUnavailable: true,
+          unavailableReason: scope?.chatScopeError || 'chat-scope-unavailable',
+        };
+      }
       try {
         const raw = await Risuai.pluginStorage.getItem(key);
-        const value = typeof raw === 'object' && raw !== null
-          ? String(raw.value || '').trim()
-          : String(raw || '').trim();
+        const store = normalizeMemoryStore(raw, agent, scope || {});
+        const previousPointer = store.pointer;
+        const matchIndex = findMemorySnapshotIndexForCount(store, currentState.messageCount);
+        if (matchIndex >= 0) {
+          store.pointer = matchIndex;
+          store.snapshots[matchIndex].usedAt = Date.now();
+        } else {
+          store.pointer = -1;
+        }
+
+        const migrated = raw && !(typeof raw === 'object' && raw !== null && raw.version === MEMORY_STACK_VERSION);
+        if (migrated || previousPointer !== store.pointer || matchIndex >= 0) {
+          store.updatedAt = Date.now();
+          await persistMemoryStore(key, store, debugLog);
+        }
+
+        const snapshot = currentMemorySnapshot(store);
+        const value = String(snapshot?.value || '').trim();
         if (debugLog) console.log(`Agents! memory loaded (${agent.name}): ${value ? 'found' : 'empty'} ${key}`);
         return {
           enabled: true,
           key,
           value,
+          store,
+          currentState,
+          pointer: store.pointer,
           characterId: scope?.characterId || 'unknown-character',
           chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
         };
       } catch (err) {
         if (debugLog) console.log(`Agents! memory load failed (${agent.name}): ${err.message}`);
@@ -999,8 +1462,73 @@
           enabled: true,
           key,
           value: '',
+          store: normalizeMemoryStore(null, agent, scope || {}),
+          currentState,
+          pointer: -1,
           characterId: scope?.characterId || 'unknown-character',
           chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
+          failed: true,
+        };
+      }
+    }
+
+    async function loadAgentMemoryReadOnly(agent, scope, debugLog, reason = 'chat-context-unavailable') {
+      if (!agent.memoryEnabled || agent.mode !== 'pre') {
+        return { enabled: false, value: '', key: '' };
+      }
+
+      const key = agentMemoryKey(agent, scope || {});
+      if (!key) {
+        if (debugLog) console.log(`Agents! memory read-only skipped (${agent.name}): chat scope unavailable; ${reason}`);
+        return {
+          enabled: true,
+          key: '',
+          value: '',
+          store: normalizeMemoryStore(null, agent, scope || {}),
+          currentState: null,
+          pointer: -1,
+          characterId: scope?.characterId || 'unknown-character',
+          chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
+          chatContextUnavailable: true,
+          chatScopeUnavailable: true,
+          unavailableReason: reason || scope?.chatScopeError || 'chat-scope-unavailable',
+        };
+      }
+      try {
+        const raw = await Risuai.pluginStorage.getItem(key);
+        const store = normalizeMemoryStore(raw, agent, scope || {});
+        const snapshot = currentMemorySnapshot(store);
+        const value = String(snapshot?.value || '').trim();
+        if (debugLog) console.log(`Agents! memory read-only (${agent.name}): ${value ? 'found' : 'empty'} ${key}; ${reason}`);
+        return {
+          enabled: true,
+          key,
+          value,
+          store,
+          currentState: null,
+          pointer: store.pointer,
+          characterId: scope?.characterId || 'unknown-character',
+          chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
+          chatContextUnavailable: true,
+          unavailableReason: reason,
+        };
+      } catch (err) {
+        if (debugLog) console.log(`Agents! memory read-only load failed (${agent.name}): ${err.message}`);
+        return {
+          enabled: true,
+          key,
+          value: '',
+          store: normalizeMemoryStore(null, agent, scope || {}),
+          currentState: null,
+          pointer: -1,
+          characterId: scope?.characterId || 'unknown-character',
+          chatIndex: scope?.chatIndex || '0',
+          chatKey: scope?.chatKey || '',
+          chatContextUnavailable: true,
+          unavailableReason: reason,
           failed: true,
         };
       }
@@ -1008,6 +1536,10 @@
 
     async function saveAgentMemory(agent, memory, memoryUpdate, debugLog) {
       if (!memory?.enabled || !memory.key) return false;
+      if (memory.chatContextUnavailable || memory.chatScopeUnavailable || !memory.currentState) {
+        if (debugLog) console.log(`Agents! memory save skipped (${agent.name}): ${memory.unavailableReason || 'context unavailable'}`);
+        return false;
+      }
       const nextMemory = String(memoryUpdate || '').trim();
       if (!nextMemory) {
         if (debugLog) console.log(`Agents! memory update empty (${agent.name}); keeping previous memory`);
@@ -1015,13 +1547,45 @@
       }
 
       try {
-        await Risuai.pluginStorage.setItem(memory.key, {
+        const store = normalizeMemoryStore(memory.store, agent, memory);
+        const state = memory.currentState || memoryStateForMessages([]);
+        const now = Date.now();
+        const snapshot = {
+          messageCount: state.messageCount,
+          preview: state.preview,
           value: nextMemory,
+          updatedAt: now,
+          usedAt: now,
+        };
+        const keepUntil = Number.isFinite(Number(store.pointer)) && store.pointer >= 0
+          ? store.pointer + 1
+          : 0;
+        store.snapshots = store.snapshots.slice(0, keepUntil);
+        const existingIndex = store.snapshots.findIndex(item => item.messageCount === state.messageCount);
+        if (existingIndex >= 0) {
+          store.snapshots[existingIndex] = {
+            ...store.snapshots[existingIndex],
+            ...snapshot,
+          };
+          store.pointer = existingIndex;
+        } else {
+          store.snapshots.push(snapshot);
+          store.pointer = store.snapshots.length - 1;
+        }
+        const compacted = compactMemorySnapshots(store.snapshots, store.pointer);
+        store.snapshots = compacted.snapshots;
+        store.pointer = compacted.pointer;
+
+        store.version = MEMORY_STACK_VERSION;
+        store.agentId = agent.id;
+        store.agentName = agent.name;
+        store.characterId = memory.characterId;
+        store.chatIndex = memory.chatIndex;
+        store.chatKey = memory.chatKey || '';
+        store.updatedAt = now;
+        await Risuai.pluginStorage.setItem(memory.key, {
+          ...store,
           updatedAt: Date.now(),
-          agentId: agent.id,
-          agentName: agent.name,
-          characterId: memory.characterId,
-          chatIndex: memory.chatIndex,
         });
         if (debugLog) console.log(`Agents! memory saved (${agent.name}): ${memory.key}`);
         return true;
@@ -1058,6 +1622,11 @@
         reason,
         characterId: scope?.characterId || 'unknown-character',
         chatIndex: scope?.chatIndex || '0',
+        chatKey: scope?.chatKey || '',
+        chatKeyDisplay: scope?.chatKeyDisplay || '',
+        chatKeySource: scope?.chatKeySource || '',
+        chatScopeAvailable: scope?.chatScopeAvailable !== false && Boolean(scope?.chatKey),
+        chatScopeError: scope?.chatScopeError || '',
         characterName: scope?.characterName || '(알 수 없는 캐릭터)',
         chatName: scope?.chatName || `(알 수 없는 채팅방)`,
         runKey: agentRunLogKey(scope || {}),
@@ -1073,8 +1642,22 @@
       };
     }
 
+    function runChatContextMeta(chatContext) {
+      return {
+        chatContextAvailable: Boolean(chatContext?.available),
+        chatContextSource: chatContext?.source || '',
+        chatContextError: chatContext?.error || '',
+        chatContextMessageCount: chatContext?.messageCount ?? 0,
+        chatContextStoredMessageCount: chatContext?.storedMessageCount ?? null,
+        chatContextAppendedCurrentUser: Boolean(chatContext?.appendedCurrentUser),
+      };
+    }
+
     async function persistRunLog(run, debugLog) {
-      if (!run?.runKey) return false;
+      if (!run?.runKey) {
+        if (debugLog) console.log('Agents! run log save skipped: chat scope unavailable');
+        return false;
+      }
       try {
         run.updatedAt = Date.now();
         await Risuai.pluginStorage.setItem(run.runKey, run);
@@ -1089,13 +1672,40 @@
     async function loadCurrentRunLog(debugLog) {
       const scope = await getAgentMemoryScope(debugLog);
       const key = agentRunLogKey(scope);
+      if (!key) {
+        return {
+          version: RUN_LOG_VERSION,
+          status: 'chat-scope-unavailable',
+          reason: scope.chatScopeError || 'chat id unavailable',
+          characterId: scope.characterId,
+          chatIndex: scope.chatIndex,
+          chatKey: '',
+          chatKeyDisplay: '',
+          chatKeySource: '',
+          chatScopeAvailable: false,
+          chatScopeError: scope.chatScopeError || 'chat id unavailable',
+          characterName: scope.characterName,
+          chatName: scope.chatName,
+          runKey: '',
+          preResults: [],
+          postResults: [],
+          notes: [],
+        };
+      }
       try {
         const run = await Risuai.pluginStorage.getItem(key);
         if (run && typeof run === 'object') {
           return {
             ...run,
+            runKey: run.runKey || key,
             characterName: run.characterName || scope.characterName,
             chatName: run.chatName || scope.chatName,
+            chatIndex: scope.chatIndex,
+            chatKey: scope.chatKey,
+            chatKeyDisplay: scope.chatKeyDisplay,
+            chatKeySource: scope.chatKeySource,
+            chatScopeAvailable: true,
+            chatScopeError: '',
           };
         }
         return {
@@ -1104,6 +1714,11 @@
           reason: '',
           characterId: scope.characterId,
           chatIndex: scope.chatIndex,
+          chatKey: scope.chatKey,
+          chatKeyDisplay: scope.chatKeyDisplay,
+          chatKeySource: scope.chatKeySource,
+          chatScopeAvailable: true,
+          chatScopeError: '',
           characterName: scope.characterName,
           chatName: scope.chatName,
           runKey: key,
@@ -1119,6 +1734,11 @@
           reason: err.message,
           characterId: scope.characterId,
           chatIndex: scope.chatIndex,
+          chatKey: scope.chatKey,
+          chatKeyDisplay: scope.chatKeyDisplay,
+          chatKeySource: scope.chatKeySource,
+          chatScopeAvailable: true,
+          chatScopeError: '',
           characterName: scope.characterName,
           chatName: scope.chatName,
           runKey: key,
@@ -1129,13 +1749,65 @@
       }
     }
 
-    async function runPrePipeline(messages, conf, pipeline, settingBlocks, type, runScope) {
-      const notes = [];
-      const userInput = getUserInput(messages);
+    async function runPrePipeline(_requestMessages, chatContext, conf, pipeline, settingBlocks, type, runScope) {
+      const contextMessages = chatContext?.available === true && Array.isArray(chatContext?.messages)
+        ? chatContext.messages
+        : [];
       const memoryScope = hasMemoryEnabledPreAgents(pipeline)
         ? runScope || await getAgentMemoryScope(conf.debugLog)
         : null;
+      const memoryCanWrite = chatContext?.available === true && memoryScope?.chatScopeAvailable !== false && Boolean(memoryScope?.chatKey);
+      const memoryUnavailableReason = chatContext?.available !== true
+        ? chatContext?.error || 'chat-context-unavailable'
+        : memoryScope?.chatScopeError || 'chat-scope-unavailable';
+      const notes = [];
+      const userInput = getUserInput(contextMessages);
       const preResults = [];
+
+      if (chatContext?.available !== true) {
+        const skipText = `(스킵: 실제 채팅방 대화 컨텍스트 없음 - ${memoryUnavailableReason})`;
+        for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+          const agents = getEnabledAgentsForRow(pipeline, row);
+          preResults.push(...agents.map(agent => ({
+            ...runAgentMeta(agent, conf),
+            content: skipText,
+            rawOutput: skipText,
+            status: 'skipped',
+            failed: true,
+            error: memoryUnavailableReason,
+            memoryStatus: agent.memoryEnabled ? 'chat-context-unavailable' : 'disabled',
+          })));
+        }
+
+        lastPipelineRun = {
+          version: RUN_LOG_VERSION,
+          type,
+          status: 'pre-skipped',
+          reason: memoryUnavailableReason,
+          characterId: runScope?.characterId || 'unknown-character',
+          chatIndex: runScope?.chatIndex || '0',
+          chatKey: runScope?.chatKey || '',
+          chatKeyDisplay: runScope?.chatKeyDisplay || '',
+          chatKeySource: runScope?.chatKeySource || '',
+          chatScopeAvailable: runScope?.chatScopeAvailable !== false && Boolean(runScope?.chatKey),
+          chatScopeError: runScope?.chatScopeError || '',
+          characterName: runScope?.characterName || '(알 수 없는 캐릭터)',
+          chatName: runScope?.chatName || '(알 수 없는 채팅방)',
+          runKey: agentRunLogKey(runScope || {}),
+          pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
+          settingBlocks: settingBlocks.content,
+          settingBlockStats: settingBlocks.stats,
+          ...runChatContextMeta(chatContext),
+          preResults,
+          postResults: [],
+          notes,
+          userInput,
+          timestamp: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        return notes;
+      }
 
       for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
         const agents = getEnabledAgentsForRow(pipeline, row);
@@ -1155,8 +1827,10 @@
               memoryStatus: agent.memoryEnabled ? 'skipped' : 'disabled',
             };
           }
-          const history = formatHistory(messages, agentConf.window);
-          const agentMemory = await loadAgentMemory(agent, memoryScope, conf.debugLog);
+          const history = formatHistory(contextMessages, agentConf.window);
+          const agentMemory = memoryCanWrite
+            ? await loadAgentMemory(agent, memoryScope, contextMessages, conf.debugLog)
+            : await loadAgentMemoryReadOnly(agent, memoryScope, conf.debugLog, memoryUnavailableReason);
           const prompt = buildAgentPrompt(agent, {
             settingBlocks: settingBlocks.content,
             history,
@@ -1173,10 +1847,18 @@
             if (agentMemory.enabled) {
               const parsed = parseMemoryAgentOutput(content);
               if (parsed.ok) {
-                const saved = await saveAgentMemory(agent, agentMemory, parsed.memoryUpdate, conf.debugLog);
-                const memoryStatus = parsed.memoryUpdate
-                  ? saved ? 'updated' : 'storage-failed'
-                  : 'empty-update';
+                let saved = false;
+                let memoryStatus = 'empty-update';
+                if (parsed.memoryUpdate) {
+                  if (agentMemory.chatScopeUnavailable) {
+                    memoryStatus = 'chat-scope-unavailable';
+                  } else if (agentMemory.chatContextUnavailable) {
+                    memoryStatus = 'chat-context-unavailable';
+                  } else {
+                    saved = await saveAgentMemory(agent, agentMemory, parsed.memoryUpdate, conf.debugLog);
+                    memoryStatus = saved ? 'updated' : 'storage-failed';
+                  }
+                }
                 return {
                   ...runAgentMeta(agent, conf),
                   content: parsed.note || content,
@@ -1186,6 +1868,9 @@
                   memoryUpdate: parsed.memoryUpdate,
                   memoryStatus,
                   memoryUpdated: Boolean(parsed.memoryUpdate && saved),
+                  memoryStateKey: '',
+                  memoryMessageCount: agentMemory.currentState?.messageCount ?? 0,
+                  memoryPointer: agentMemory.pointer,
                 };
               }
               if (conf.debugLog) console.log(`Agents! memory parse failed (${agent.name}); keeping previous memory`);
@@ -1198,6 +1883,9 @@
                 memoryUpdate: '',
                 memoryStatus: 'parse-failed',
                 memoryUpdated: false,
+                memoryStateKey: '',
+                memoryMessageCount: agentMemory.currentState?.messageCount ?? 0,
+                memoryPointer: agentMemory.pointer,
               };
             }
             return {
@@ -1241,12 +1929,21 @@
         reason: '',
         characterId: runScope?.characterId || 'unknown-character',
         chatIndex: runScope?.chatIndex || '0',
+        chatKey: runScope?.chatKey || '',
+        chatKeyDisplay: runScope?.chatKeyDisplay || '',
+        chatKeySource: runScope?.chatKeySource || '',
+        chatScopeAvailable: runScope?.chatScopeAvailable !== false && Boolean(runScope?.chatKey),
+        chatScopeError: runScope?.chatScopeError || '',
         characterName: runScope?.characterName || '(알 수 없는 캐릭터)',
         chatName: runScope?.chatName || '(알 수 없는 채팅방)',
         runKey: agentRunLogKey(runScope || {}),
         pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
+        ...runChatContextMeta({
+          ...chatContext,
+          messageCount: chatContext?.messageCount ?? contextMessages.length,
+        }),
         preResults,
         postResults: [],
         notes,
@@ -1446,7 +2143,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#101114;color:#eceff4;min-height:100vh;line-height:1.45}
-.wrap{max-width:1120px;margin:0 auto;padding:22px 16px 84px}
+.wrap{max-width:1120px;margin:0 auto;padding:22px 16px 124px}
 .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
 h1{font-size:1.34rem;font-weight:720;letter-spacing:0;margin-bottom:4px}.subtitle{color:#98a2b3;font-size:.84rem}
 .header-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
@@ -1463,6 +2160,11 @@ h1{font-size:1.34rem;font-weight:720;letter-spacing:0;margin-bottom:4px}.subtitl
 .badge.ok{background:#123323;color:#6ee7a8}.badge.err{background:#3a1717;color:#ff8a8a}.badge.neutral{background:#27313c;color:#a8c7e6}
 .detail-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}.detail-block{background:#0f1115;border:1px solid #303640;border-radius:7px;padding:10px;margin-top:10px}
 .detail-block h3{font-size:.78rem;color:#cbd5e1;margin-bottom:7px}.detail-block pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#eef2f7}
+.detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.68);z-index:20;display:flex;align-items:center;justify-content:center;padding:18px}
+.memory-modal{width:min(920px,100%);max-height:min(82vh,760px);overflow:auto;background:#15171c;border:1px solid #343a46;border-radius:8px;box-shadow:0 22px 70px rgba(0,0,0,.45)}
+.memory-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid #2c313a;padding:14px 16px}.memory-modal-head h2{font-size:1rem;margin:0 0 4px}.memory-modal-body{padding:14px 16px 18px}
+.memory-stack{display:grid;gap:10px}.memory-snapshot{border:1px solid #303640;background:#101218;border-radius:7px;padding:11px}.memory-snapshot.current{border-color:#5e91ee;background:#121a29}
+.memory-snapshot-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}.memory-snapshot-title{font-size:.82rem;font-weight:730}.memory-snapshot-meta{font-size:.72rem;color:#9aa4b2}
 .empty{color:#9aa4b2;font-size:.84rem;padding:12px;border:1px dashed #363d47;border-radius:8px}.actions{position:fixed;left:0;right:0;bottom:0;background:rgba(16,17,20,.96);border-top:1px solid #2a2e36;padding:10px 16px}
 .actions-inner{max-width:1120px;margin:0 auto;display:flex;gap:8px;justify-content:flex-end}button{padding:9px 14px;border-radius:7px;border:1px solid #343944;background:#20242b;color:#eef2f7;cursor:pointer;font-size:.86rem;font-weight:650}
 button:hover{background:#2a3039}button.ghost{background:#15171b;color:#a8b0bd}
@@ -1477,6 +2179,10 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       <div class="run-meta">
         <span class="badge neutral">캐릭터: ${escHtml(runLog?.characterName || '(알 수 없는 캐릭터)')}</span>
         <span class="badge neutral">채팅방: ${escHtml(runLog?.chatName || '(알 수 없는 채팅방)')}</span>
+        ${runLog?.chatKeyDisplay || runLog?.chatKey ? `<span class="badge neutral">채팅방 키: ${escHtml(runLog.chatKeyDisplay || formatChatKeyPreview(runLog.chatKey))}</span>` : ''}
+        ${runLog?.chatScopeAvailable === false ? `<span class="badge err">채팅방 스코프 없음${runLog.chatScopeError ? `: ${escHtml(runLog.chatScopeError)}` : ''}</span>` : ''}
+        ${runLog?.chatContextSource ? `<span class="badge ${runLog.chatContextAvailable ? 'ok' : 'err'}">대화 컨텍스트: ${escHtml(runLog.chatContextSource)} · ${escHtml(runLog.chatContextMessageCount ?? 0)}개</span>` : ''}
+        ${runLog?.chatContextError ? `<span class="badge err">컨텍스트 오류: ${escHtml(runLog.chatContextError)}</span>` : ''}
       </div>
     </div>
     <div class="header-actions">
@@ -1557,11 +2263,16 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
           return;
         }
         root.innerHTML = inspectorDetailHtml(agent, findRunResultForAgent(runLog, agent));
+        root.querySelector('[data-memory-stack-agent-id]')?.addEventListener('click', async (event) => {
+          const targetAgent = findAgentById(pipeline, event.currentTarget.getAttribute('data-memory-stack-agent-id'));
+          if (targetAgent) await openMemoryStackModal(targetAgent, conf);
+        });
       }
     }
 
     function runSummaryText(runLog) {
       if (!runLog || runLog.status === 'no-run') return '아직 이 채팅에서 실행된 Agents! 결과가 없습니다.';
+      if (runLog.status === 'chat-scope-unavailable') return `채팅방 고유 스코프를 만들지 못했습니다: ${runLog.reason || 'chat id unavailable'}`;
       if (runLog.status === 'load-failed') return `최근 실행 결과를 불러오지 못했습니다: ${runLog.reason || 'unknown error'}`;
       const time = runLog.updatedAt || runLog.timestamp;
       const date = time ? new Date(time).toLocaleString() : '시간 정보 없음';
@@ -1612,23 +2323,25 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
       return labels[status] || status || '성공';
     }
 
+    function statusBadgeClass(status) {
+      if (status === 'success' || status === 'updated') return 'ok';
+      if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
+      return 'neutral';
+    }
+
     function memoryStatusLabel(status) {
       const labels = {
-        disabled: '비활성화',
-        updated: '저장됨',
-        'empty-update': '갱신 없음',
+        disabled: '비활성',
+        updated: '갱신됨',
+        'empty-update': '빈 갱신',
         'parse-failed': '파싱 실패',
         'storage-failed': '저장 실패',
+        'chat-context-unavailable': '대화 컨텍스트 없음',
+        'chat-scope-unavailable': '채팅방 스코프 없음',
         skipped: '스킵',
         failed: '실패',
       };
-      return labels[status] || status || '알 수 없음';
-    }
-
-    function statusBadgeClass(status) {
-      if (status === 'success' || status === 'updated') return 'ok';
-      if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed') return 'err';
-      return 'neutral';
+      return labels[status] || status || '';
     }
 
     function inspectorDetailHtml(agent, result) {
@@ -1640,10 +2353,12 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
         <span class="badge neutral">Row ${escHtml(agent.row + 1)}</span>
         <span class="badge neutral">${escHtml(modeLabel)}</span>
         ${resultBadge}
+        ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
       </div>`;
+      const memoryButton = memoryInspectorButtonHtml(agent);
 
       if (!result) {
-        return `<h2>${escHtml(agent.name)}</h2>${meta}<div class="empty">이 에이전트의 최근 실행 결과가 없습니다.</div>`;
+        return `<h2>${escHtml(agent.name)}</h2>${meta}${memoryButton}<div class="empty">이 에이전트의 최근 실행 결과가 없습니다.</div>`;
       }
 
       if (agent.mode === 'post') {
@@ -1653,18 +2368,97 @@ button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
 
-      const memoryBlocks = result.memoryEnabled
-        ? `${detailBlockHtml('이전 기억', result.memoryPrevious || EMPTY_AGENT_MEMORY)}
-           ${result.memoryFormat ? detailBlockHtml('기억 포맷', result.memoryFormat) : ''}
-           ${detailBlockHtml('갱신된 기억', result.memoryUpdate || '(갱신된 기억 없음)')}
-           ${detailBlockHtml('기억 저장 상태', memoryStatusLabel(result.memoryStatus))}`
-        : '';
-
       return `<h2>${escHtml(agent.name)}</h2>${meta}
+        ${memoryButton}
         ${detailBlockHtml('생성된 Note', result.content || '(노트 없음)')}
         ${detailBlockHtml('Raw Output', result.rawOutput || result.content || '(원본 출력 없음)')}
-        ${memoryBlocks}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
+    }
+
+    function memoryInspectorButtonHtml(agent) {
+      if (!(agent.mode === 'pre' && agent.memoryEnabled)) return '';
+      return `<div class="detail-actions"><button data-memory-stack-agent-id="${escHtml(agent.id)}">현재 채팅방 기억 보기</button></div>`;
+    }
+
+    async function openMemoryStackModal(agent, conf) {
+      const scope = await getAgentMemoryScope(conf?.debugLog);
+      const key = agentMemoryKey(agent, scope);
+      let store = normalizeMemoryStore(null, agent, scope);
+      let error = '';
+      if (!key) {
+        error = scope.chatScopeError || '채팅방 고유 스코프를 만들지 못했습니다.';
+      } else {
+        try {
+          const raw = await Risuai.pluginStorage.getItem(key);
+          store = normalizeMemoryStore(raw, agent, scope);
+        } catch (err) {
+          error = err.message || String(err);
+        }
+      }
+
+      document.getElementById('memory-stack-modal')?.remove();
+      document.body.insertAdjacentHTML('beforeend', memoryStackModalHtml(agent, store, scope, key, error));
+      document.getElementById('memory-stack-close')?.addEventListener('click', closeMemoryStackModal);
+      document.getElementById('memory-stack-modal')?.addEventListener('click', (event) => {
+        if (event.target?.id === 'memory-stack-modal') closeMemoryStackModal();
+      });
+    }
+
+    function closeMemoryStackModal() {
+      document.getElementById('memory-stack-modal')?.remove();
+    }
+
+    function memoryStackModalHtml(agent, store, scope, key, error = '') {
+      const list = (Array.isArray(store?.snapshots) ? store.snapshots : [])
+        .slice()
+        .sort((a, b) => (Number(a.messageCount) || 0) - (Number(b.messageCount) || 0))
+        .map((snapshot, idx, snapshots) => ({
+          snapshot,
+          latest: idx === snapshots.length - 1,
+        }));
+      const content = error
+        ? `<div class="empty">기억을 불러오지 못했습니다: ${escHtml(error)}</div>`
+        : list.length
+          ? `<div class="memory-stack">${list.map(item => memorySnapshotHtml(item.snapshot, item.latest)).join('')}</div>`
+          : '<div class="empty">현재 채팅방에 저장된 기억이 없습니다.</div>';
+
+      return `<div id="memory-stack-modal" class="modal-backdrop">
+        <div class="memory-modal" role="dialog" aria-modal="true" aria-label="현재 채팅방 기억">
+          <div class="memory-modal-head">
+            <div>
+              <h2>${escHtml(agent.name)} 기억</h2>
+              <div class="metric-sub">캐릭터: ${escHtml(scope.characterName || '(알 수 없음)')} · 채팅방: ${escHtml(scope.chatName || '(알 수 없음)')}</div>
+              <div class="metric-sub">채팅방 키: ${escHtml(scope.chatKeyDisplay || '(없음)')}${scope.chatKeySource ? ` · ${escHtml(scope.chatKeySource)}` : ''}</div>
+              ${scope.chatScopeError ? `<div class="metric-sub">스코프 오류: ${escHtml(scope.chatScopeError)}</div>` : ''}
+              <div class="metric-sub">storage key: ${escHtml(key ? formatChatKeyPreview(key) : '(없음)')}</div>
+            </div>
+            <button id="memory-stack-close" class="ghost">닫기</button>
+          </div>
+          <div class="memory-modal-body">${content}</div>
+        </div>
+      </div>`;
+    }
+
+    function memorySnapshotHtml(snapshot, isLatest) {
+      const label = `대화 ${snapshot.messageCount ?? 0}개 시점`;
+      const updatedAt = formatInspectorTime(snapshot.updatedAt);
+      const usedAt = formatInspectorTime(snapshot.usedAt);
+      return `<div class="memory-snapshot${isLatest ? ' current' : ''}">
+        <div class="memory-snapshot-head">
+          <div>
+            <div class="memory-snapshot-title">${escHtml(label)}</div>
+            <div class="memory-snapshot-meta">실제 대화 메시지 ${escHtml(snapshot.messageCount ?? 0)}개</div>
+          </div>
+          <div class="memory-snapshot-meta">사용 ${escHtml(usedAt)} · 갱신 ${escHtml(updatedAt)}</div>
+        </div>
+        ${snapshot.preview ? `<div class="metric-sub">스냅샷 기준 최근 대화: ${escHtml(snapshot.preview)}</div>` : ''}
+        <div class="detail-block"><h3>기억 내용</h3><pre>${escHtml(snapshot.value || EMPTY_AGENT_MEMORY)}</pre></div>
+      </div>`;
+    }
+
+    function formatInspectorTime(time) {
+      const numeric = Number(time);
+      return Number.isFinite(numeric) && numeric > 0 ? new Date(numeric).toLocaleString() : '시간 정보 없음';
     }
 
     function detailBlockHtml(title, text) {
@@ -1733,6 +2527,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#5585d9}
 .preset-list{display:grid;gap:8px}.preset-item{border:1px solid #373d48;background:#111318;border-radius:7px;padding:9px 10px;cursor:pointer}
 .preset-item:hover,.preset-item.selected{border-color:#5e91ee;background:#202838}.preset-title{font-size:.82rem;font-weight:720}.preset-meta{font-size:.7rem;color:#9ba6b5;margin-top:3px;overflow-wrap:anywhere}
 .provider-key-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
+.provider-key-status{display:flex;align-items:center;min-height:38px}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.64);z-index:40;display:flex;align-items:center;justify-content:center;padding:18px}
 .prompt-modal{width:min(920px,100%);max-height:88vh;overflow:auto;background:#191b20;border:1px solid #343944;border-radius:8px;padding:16px;box-shadow:0 18px 60px rgba(0,0,0,.42)}
 .prompt-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
@@ -1740,7 +2535,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#5585d9}
 .prompt-preview-block{background:#0f1115;border:1px solid #303640;border-radius:7px;padding:10px;margin-top:10px}
 .prompt-preview-block h3{font-size:.78rem;color:#cbd5e1;margin-bottom:7px}
 .prompt-preview-block pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#eef2f7}
-.actions-inner{max-width:1120px;margin:0 auto;display:flex;gap:8px;justify-content:flex-end}
+.actions-inner{max-width:1120px;margin:0 auto;display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
 button{padding:9px 14px;border-radius:7px;border:1px solid #343944;background:#20242b;color:#eef2f7;cursor:pointer;font-size:.86rem;font-weight:650}
 button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#2f6fed;color:#fff}button.primary:hover{background:#275fce}button.ghost{background:#15171b;color:#a8b0bd}
 @media (max-width: 860px){.top{display:block}.header-actions{justify-content:flex-start;margin-top:12px}.status-strip,.grid,.row2,.pipeline-shell{grid-template-columns:1fr}.pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}}
@@ -1754,13 +2549,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     <div class="header-actions">
       <button id="settings-tab-btn" class="primary">설정</button>
       <button id="run-inspector-tab-btn" class="ghost">Run Inspector</button>
-      <button id="llm-test-btn">LLM 인증 테스트</button>
-      <button id="all-test-btn" class="primary">전체 테스트</button>
     </div>
   </div>
 
   <div id="msg" class="msg"></div>
-  <div id="test-results"></div>
 
   <div class="card">
     <h2>Pipeline Builder</h2>
@@ -1784,6 +2576,11 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
   </div>
 
   <div class="card">
+    <h2>Provider API Keys</h2>
+    <div id="provider-key-editor"></div>
+  </div>
+
+  <div class="card">
     <h2>공통 설정</h2>
     <div class="field">
       <label for="agents_debug_log">Debug Log</label>
@@ -1794,6 +2591,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     </div>
   </div>
 
+  <div id="test-results"></div>
 </div>
 
 <div class="actions">
@@ -1826,7 +2624,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       let modelPresetsState = normalizeModelPresets(JSON.parse(JSON.stringify(initialConf.modelPresets || [])), initialConf);
       let providerKeysState = { ...(initialConf.providerKeys || {}) };
       let selectedPresetId = modelPresetsState[0]?.id || DEFAULT_MODEL_PRESET_ID;
-      let pipelineState = normalizePipelineConfig(JSON.parse(JSON.stringify(initialPipeline)), modelPresetsState, initialConf);
+      let selectedProviderKeyProvider = normalizeProviderValue(modelPresetsState[0]?.provider || initialConf.provider || DEFAULT_AGENT_PROVIDER);
+      let pipelineState = normalizePipelineConfig(JSON.parse(JSON.stringify(initialPipeline)), modelPresetsState);
       let selectedAgentId = findFirstAgentId(pipelineState);
 
       setupProviderControls();
@@ -1836,15 +2635,16 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       renderAgentEditor();
       renderPresetList();
       renderPresetEditor();
+      renderProviderKeyEditor();
 
-      document.getElementById('llm-test-btn')?.addEventListener('click', testSelectedPreset);
-      document.getElementById('all-test-btn')?.addEventListener('click', testSelectedPreset);
       document.getElementById('run-inspector-tab-btn')?.addEventListener('click', openRunInspector);
       document.getElementById('preset-add-btn')?.addEventListener('click', addModelPreset);
       document.getElementById('save-btn')?.addEventListener('click', async () => {
         try {
           const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState);
           await saveLiteConfig(next);
+          providerKeysState = { ...(next.providerKeys || {}) };
+          renderProviderKeyEditor();
           showMsg('저장 완료', true);
         } catch (err) {
           showMsg(`저장 오류: ${err.message}`, false);
@@ -2069,7 +2869,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
         row.agents.push(agent);
         selectedAgentId = agent.id;
-        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState, initialConf);
+        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState);
         renderPipeline();
         renderAgentEditor();
       }
@@ -2085,7 +2885,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         row.agents.forEach((item, index) => {
           item.column = index;
         });
-        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState, initialConf);
+        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState);
         renderPipeline();
         renderAgentEditor();
       }
@@ -2094,7 +2894,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const row = pipelineState.rows[agent.row];
         row.agents = row.agents.filter(item => item.id !== agent.id);
         selectedAgentId = findFirstAgentId(pipelineState);
-        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState, initialConf);
+        pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState);
         renderPipeline();
         renderAgentEditor();
       }
@@ -2126,29 +2926,29 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           root.innerHTML = '<div class="editor-empty">모델 프리셋을 추가하세요.</div>';
           return;
         }
-
-        const hasKey = Boolean(providerKeysState[preset.provider]);
-        const isVertex = isVertexProvider(preset.provider);
-        const credentialInput = isVertex
-          ? `<textarea id="preset_provider_key" placeholder="${hasKey ? 'Vertex credential JSON 저장됨. 새 JSON 입력 시 교체됩니다.' : 'Vertex service account JSON'}"></textarea>
-             <input id="preset_provider_key_file" type="file" accept="application/json">`
-          : `<input id="preset_provider_key" type="password" value="" placeholder="${hasKey ? '저장됨 - 새 값 입력 시 교체' : 'API key'}">`;
+        if (!providerDefaults(preset.provider) && preset.provider !== 'custom') {
+          preset.provider = 'custom';
+        }
+        const isCustomProvider = !providerDefaults(preset.provider);
+        if (!isCustomProvider) {
+          preset.baseUrl = providerDefaults(preset.provider).baseUrl;
+        }
+        const endpointField = isCustomProvider
+          ? `<div class="field"><label for="preset_baseUrl">Endpoint Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}"></div>`
+          : '';
 
         root.innerHTML = `
           <div class="field"><label for="preset_name">Preset Name</label><input id="preset_name" type="text" value="${escHtml(preset.name)}"></div>
           <div class="field"><label for="preset_provider">Provider</label>${presetProviderSelect('preset_provider', preset.provider)}</div>
-          <div class="field"><label for="preset_baseUrl">Endpoint Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}"></div>
+          ${endpointField}
           <div class="field"><label for="preset_model_select">Model</label>${modelSelect('preset_model', preset.provider, preset.model)}</div>
           <div class="row2">
             <div class="field"><label for="preset_temperature">Temperature</label><input id="preset_temperature" type="number" value="${escHtml(preset.temperature)}"></div>
             <div class="field"><label for="preset_maxTokens">Max Tokens</label><input id="preset_maxTokens" type="number" value="${escHtml(preset.maxTokens)}" placeholder="비우면 provider 기본값"></div>
           </div>
           <div class="field"><label for="preset_contextWindow">Context Window</label><input id="preset_contextWindow" type="number" min="1" value="${escHtml(preset.contextWindow)}"></div>
-          <div class="provider-key-row">
-            <div class="field"><label for="preset_provider_key">${escHtml(preset.provider)} API Key</label>${credentialInput}</div>
-            <button id="preset-key-delete-btn" class="danger">키 삭제</button>
-          </div>
           <div class="mini-actions">
+            <button id="preset-test-btn">Preset test</button>
             <button id="preset-delete-btn" class="danger">프리셋 삭제</button>
           </div>`;
 
@@ -2168,11 +2968,12 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           const previousModel = preset.model;
           preset.provider = event.target.value;
           const defaults = providerDefaults(preset.provider);
-          if (defaults && shouldReplaceEndpoint(preset.baseUrl)) preset.baseUrl = defaults.baseUrl;
+          if (defaults) preset.baseUrl = defaults.baseUrl;
           if (defaults && shouldReplaceModel(previousModel)) preset.model = defaults.model;
           renderPipeline();
           renderPresetList();
           renderPresetEditor();
+          renderProviderKeyEditor();
         });
 
         document.getElementById('preset_model_select')?.addEventListener('change', (event) => {
@@ -2192,25 +2993,68 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           }
         });
 
-        document.getElementById('preset_provider_key')?.addEventListener('input', (event) => {
-          const value = event.target.value;
-          if (value) providerKeysState[preset.provider] = value;
+        document.getElementById('preset-test-btn')?.addEventListener('click', testSelectedPreset);
+        document.getElementById('preset-delete-btn')?.addEventListener('click', () => deleteModelPreset(preset));
+      }
+
+      function renderProviderKeyEditor() {
+        const root = document.getElementById('provider-key-editor');
+        if (!root) return;
+
+        const provider = normalizeProviderValue(selectedProviderKeyProvider || DEFAULT_AGENT_PROVIDER);
+        const hasKey = Boolean(providerKeysState[provider]);
+        const status = hasKey
+          ? '<span class="badge ok">저장됨</span>'
+          : '<span class="badge neutral">미설정</span>';
+        const secretField = isVertexProvider(provider)
+          ? `<textarea id="provider_key_secret" data-masked-secret="${hasKey ? 'true' : 'false'}" placeholder="Vertex service account JSON">${hasKey ? MASKED_SECRET : ''}</textarea>
+             <input id="provider_key_file" type="file" accept="application/json,.json">`
+          : `<input id="provider_key_secret" data-masked-secret="${hasKey ? 'true' : 'false'}" type="${hasKey ? 'text' : 'password'}" value="${hasKey ? MASKED_SECRET : ''}" placeholder="API key" autocomplete="off">`;
+
+        root.innerHTML = `
+          <div class="row2">
+            <div class="field"><label for="provider_key_provider">Provider</label>${providerKeyProviderSelect('provider_key_provider', provider)}</div>
+            <div class="field"><label>저장 상태</label><div class="provider-key-status">${status}</div></div>
+          </div>
+          <div class="provider-key-row">
+            <div class="field"><label for="provider_key_secret">${escHtml(provider)} API Key</label>${secretField}</div>
+            <button id="provider-key-delete-btn" class="danger">키 삭제</button>
+          </div>`;
+
+        bindProviderKeyEditor(provider);
+      }
+
+      function bindProviderKeyEditor(provider) {
+        document.getElementById('provider_key_provider')?.addEventListener('change', (event) => {
+          selectedProviderKeyProvider = normalizeProviderValue(event.target.value || DEFAULT_AGENT_PROVIDER);
+          renderProviderKeyEditor();
         });
 
-        document.getElementById('preset_provider_key_file')?.addEventListener('change', async (event) => {
+        const secret = document.getElementById('provider_key_secret');
+        secret?.addEventListener('focus', () => {
+          if (secret.dataset.maskedSecret === 'true' && secret.value === MASKED_SECRET) {
+            secret.value = '';
+            secret.dataset.maskedSecret = 'false';
+            if (secret.tagName === 'INPUT') secret.type = 'password';
+          }
+        });
+        secret?.addEventListener('input', (event) => {
+          const value = event.target.value;
+          if (value && value !== MASKED_SECRET) providerKeysState[provider] = value;
+        });
+
+        document.getElementById('provider_key_file')?.addEventListener('change', async (event) => {
           const file = event.target.files?.[0];
           if (!file) return;
-          providerKeysState[preset.provider] = await file.text();
+          providerKeysState[provider] = await file.text();
           showMsg('Vertex AI JSON credential을 불러왔습니다.', true);
-          renderPresetEditor();
+          renderProviderKeyEditor();
         });
 
-        document.getElementById('preset-key-delete-btn')?.addEventListener('click', () => {
-          delete providerKeysState[preset.provider];
-          renderPresetEditor();
+        document.getElementById('provider-key-delete-btn')?.addEventListener('click', () => {
+          delete providerKeysState[provider];
+          renderProviderKeyEditor();
         });
-
-        document.getElementById('preset-delete-btn')?.addEventListener('click', () => deleteModelPreset(preset));
       }
 
       function addModelPreset() {
@@ -2228,6 +3072,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         selectedPresetId = preset.id;
         renderPresetList();
         renderPresetEditor();
+        renderProviderKeyEditor();
       }
 
       function deleteModelPreset(preset) {
@@ -2247,6 +3092,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         renderAgentEditor();
         renderPresetList();
         renderPresetEditor();
+        renderProviderKeyEditor();
       }
 
       async function testSelectedPreset() {
@@ -2268,10 +3114,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         try {
           const result = await testProviderEndpoint(conf);
           const latency = Date.now() - started;
-          showMsg('LLM 인증 테스트 성공', true);
+          showMsg('Preset test 성공', true);
           setTestResults(testResultHtml(conf, true, result.status, latency, '', result.url));
         } catch (err) {
-          showMsg(`LLM 인증 테스트 실패: ${err.message}`, false);
+          showMsg(`Preset test 실패: ${err.message}`, false);
           setTestResults(testResultHtml(conf, false, null, Date.now() - started, err.message, testEndpointUrl(conf)));
         }
       }
@@ -2312,11 +3158,20 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
     function presetProviderSelect(id, value) {
       const normalized = normalizeProviderValue(value || DEFAULT_AGENT_PROVIDER);
-      const options = providerOptions().filter(option => option.value !== 'custom');
+      const options = providerOptions();
       const known = options.some(option => option.value === normalized);
-      const finalOptions = known ? options : [...options, { value: normalized, label: normalized }];
-      return `<select id="${id}">${finalOptions.map(option =>
-        `<option value="${escHtml(option.value)}" ${option.value === normalized ? 'selected' : ''}>${escHtml(option.label)}</option>`
+      const selected = known ? normalized : 'custom';
+      return `<select id="${id}">${options.map(option =>
+        `<option value="${escHtml(option.value)}" ${option.value === selected ? 'selected' : ''}>${escHtml(option.label)}</option>`
+      ).join('')}</select>`;
+    }
+
+    function providerKeyProviderSelect(id, value) {
+      const normalized = normalizeProviderValue(value || DEFAULT_AGENT_PROVIDER);
+      const options = providerOptions();
+      const selected = options.some(option => option.value === normalized) ? normalized : DEFAULT_AGENT_PROVIDER;
+      return `<select id="${id}">${options.map(option =>
+        `<option value="${escHtml(option.value)}" ${option.value === selected ? 'selected' : ''}>${escHtml(option.label)}</option>`
       ).join('')}</select>`;
     }
 
@@ -2327,7 +3182,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       Object.keys(providerKeys || {}).forEach((key) => {
         const provider = normalizeProviderValue(key);
         const value = String(providerKeys[key] || '');
-        if (provider && value) normalizedKeys[provider] = value;
+        if (provider && value && value !== MASKED_SECRET) normalizedKeys[provider] = value;
       });
       return {
         provider: firstPreset.provider,
@@ -2338,7 +3193,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
         debugLog: parseBool(getInputValue('agents_debug_log'), true),
-        pipeline: normalizePipelineConfig(pipeline, normalizedPresets, initialConf),
+        pipeline: normalizePipelineConfig(pipeline, normalizedPresets),
         modelPresets: normalizedPresets,
         providerKeys: normalizedKeys,
       };
@@ -2376,10 +3231,10 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
       try {
         const result = await testProviderEndpoint(conf);
         const latency = Date.now() - started;
-        showMsg('LLM 인증 테스트 성공', true);
+        showMsg('Preset test 성공', true);
         setTestResults(testResultHtml(conf, true, result.status, latency, '', result.url));
       } catch (err) {
-        showMsg(`LLM 인증 테스트 실패: ${err.message}`, false);
+        showMsg(`Preset test 실패: ${err.message}`, false);
         setTestResults(testResultHtml(conf, false, null, Date.now() - started, err.message, testEndpointUrl(conf)));
       }
     }
@@ -2433,7 +3288,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     function testResultHtml(conf, success, status, latency, error, urlOverride = null) {
       return `
         <div class="card">
-          <h2>LLM 인증 테스트</h2>
+          <h2>Preset test</h2>
           <div class="kv">
             <div class="k">결과</div><div class="v"><span class="badge ${success ? 'ok' : 'err'}">${success ? '성공' : '실패'}</span></div>
             <div class="k">Provider</div><div class="v">${escHtml(conf.provider)}</div>
@@ -2873,11 +3728,13 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         const conf = await getConfig();
         const pipeline = await getPipelineConfig(conf);
         const runScope = await getAgentMemoryScope(conf.debugLog);
+        const chatContext = await loadActualChatContext(messages, conf.debugLog);
 
         if (!hasUsableProviderKeyForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
           console.log('Agents!: provider API key not set — pre-agent pipeline skipped');
           lastPipelineRun = createRunLogBase(type, pipeline, conf, runScope, 'skipped', 'pre-agent provider API key not set');
-          lastPipelineRun.userInput = getUserInput(messages);
+          lastPipelineRun.userInput = getUserInput(chatContext.messages);
+          Object.assign(lastPipelineRun, runChatContextMeta(chatContext));
           await persistRunLog(lastPipelineRun, conf.debugLog);
           return messages;
         }
@@ -2887,12 +3744,15 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
         if (conf.debugLog) {
           console.log('Agents! debug: beforeRequest type =', type);
           logPromptFlow('Agents! debug: RisuAI original messages', messages, true);
+          console.log(`Agents! debug: chat context source = ${chatContext.source}; available = ${chatContext.available}; messages = ${chatContext.messageCount}`);
+          if (chatContext.error) console.log(`Agents! debug: chat context error = ${chatContext.error}`);
+          logPromptFlow('Agents! debug: messages used by Agents! context', chatContext.messages, true);
           logTextBlock('Agents! debug: setting blocks passed to agents', settingBlocks.content);
           logSettingBlockStats(settingBlocks.stats);
-          logTextBlock('Agents! debug: current user input passed to agents', getUserInput(messages));
+          logTextBlock('Agents! debug: current user input passed to agents', getUserInput(chatContext.messages));
         }
 
-        const notes = await runPrePipeline(messages, conf, pipeline, settingBlocks, type, runScope);
+        const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope);
         const injectedMessages = injectAgentNotes(messages, notes);
         await persistRunLog(lastPipelineRun, conf.debugLog);
         if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
@@ -2916,7 +3776,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
         if (!hasPostAgents) {
           if (lastPipelineRun) {
-            if (lastPipelineRun.status !== 'skipped') lastPipelineRun.status = 'complete';
+            if (lastPipelineRun.status !== 'skipped' && lastPipelineRun.status !== 'pre-skipped') lastPipelineRun.status = 'complete';
             lastPipelineRun.finalResponse = String(content ?? '');
             await persistRunLog(lastPipelineRun, conf.debugLog);
           }
