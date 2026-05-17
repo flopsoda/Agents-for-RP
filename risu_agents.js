@@ -2659,6 +2659,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#5585d9}
 .preset-shell{display:grid;grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr);gap:12px;align-items:start}
 .preset-list{display:grid;gap:8px}.preset-item{border:1px solid #373d48;background:#111318;border-radius:7px;padding:9px 10px;cursor:pointer}
 .preset-item:hover,.preset-item.selected{border-color:#5e91ee;background:#202838}.preset-title{font-size:.82rem;font-weight:720}.preset-meta{font-size:.7rem;color:#9ba6b5;margin-top:3px;overflow-wrap:anywhere}
+.preset-test-results{margin-top:10px}.test-result{border:1px solid #303640;background:#111318;border-radius:7px;padding:10px}
+.test-result h3{font-size:.82rem;margin-bottom:8px;color:#dce4f0}
 .provider-key-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 .provider-key-status{display:flex;align-items:center;min-height:38px}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.64);z-index:40;display:flex;align-items:center;justify-content:center;padding:18px}
@@ -2724,7 +2726,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     </div>
   </div>
 
-  <div id="test-results"></div>
+  <div id="test-results" class="preset-test-results"></div>
 </div>
 
 <div class="actions">
@@ -3083,7 +3085,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
           <div class="mini-actions">
             <button id="preset-test-btn">Preset test</button>
             <button id="preset-delete-btn" class="danger">프리셋 삭제</button>
-          </div>`;
+          </div>
+          <div id="preset-test-results" class="preset-test-results"></div>`;
 
         bindPresetEditor(preset);
       }
@@ -3420,8 +3423,8 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
 
     function testResultHtml(conf, success, status, latency, error, urlOverride = null) {
       return `
-        <div class="card">
-          <h2>Preset test</h2>
+        <div class="test-result">
+          <h3>Preset test</h3>
           <div class="kv">
             <div class="k">결과</div><div class="v"><span class="badge ${success ? 'ok' : 'err'}">${success ? '성공' : '실패'}</span></div>
             <div class="k">Provider</div><div class="v">${escHtml(conf.provider)}</div>
@@ -3435,7 +3438,7 @@ button:hover{background:#2a3039}button.primary{background:#2f6fed;border-color:#
     }
 
     function setTestResults(html) {
-      const el = document.getElementById('test-results');
+      const el = document.getElementById('preset-test-results') || document.getElementById('test-results');
       if (el) el.innerHTML = html;
     }
 
