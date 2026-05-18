@@ -3607,8 +3607,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const memoryEditor = agent.mode === 'pre'
           ? `<label class="checkline"><input id="edit_memoryEnabled" type="checkbox" ${agent.memoryEnabled ? 'checked' : ''}> 기억 활성화</label>
              ${agent.memoryEnabled ? `<div class="memory-settings">
-               <div class="field"><label for="edit_memoryInstruction">기억 지시</label><textarea id="edit_memoryInstruction" placeholder="예: 스나가 만난 등장인물들을 기억하세요.">${escHtml(agent.memoryInstruction)}</textarea></div>
-               <div class="field"><label for="edit_memoryFormat">기억 포맷</label><textarea id="edit_memoryFormat" placeholder="예: 이름만 쉼표로 구분해 작성하세요. 예: 하유희, 민수, 민지">${escHtml(agent.memoryFormat)}</textarea></div>
+               <div class="field"><label for="edit_memoryInstruction">기억 지시</label><textarea id="edit_memoryInstruction" placeholder="예: 현재 대화에서 계속 참고해야 할 인물, 장소, 약속, 단서를 기억하세요.">${escHtml(agent.memoryInstruction)}</textarea></div>
+               <div class="field"><label for="edit_memoryFormat">기억 포맷</label><textarea id="edit_memoryFormat" placeholder="예: 핵심 항목을 짧은 목록으로 정리하세요. 예: 인물 - 내용 / 장소 - 내용">${escHtml(agent.memoryFormat)}</textarea></div>
              </div>` : ''}`
           : '';
         const postModeEditor = agent.mode === 'post'
