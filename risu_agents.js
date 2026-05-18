@@ -3162,6 +3162,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .file-input-hidden{display:none}
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
+.pipeline-row.main{grid-template-columns:92px minmax(0,1fr)}
 .inspector-shell .pipeline-row{grid-template-columns:92px minmax(0,1fr)}
 .pipeline-row.main{border-color:#555;background:#1f1f1f}
 .row-label{font-size:.77rem;color:#e8e8e8;font-weight:800}.row-kind{font-size:.68rem;color:var(--muted-2);margin-top:2px}
@@ -3173,12 +3174,13 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .agent-name,.preset-title{font-size:.82rem;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-meta,.preset-meta{font-size:.69rem;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .preset-meta{overflow-wrap:anywhere;white-space:normal}
-.main-chip{display:inline-flex;align-items:center;justify-content:center;min-height:38px;border:1px solid var(--line-strong);background:var(--surface-2);border-radius:999px;padding:8px 14px;font-size:.84rem;font-weight:800}
+.main-model-label{display:flex;align-items:center;justify-content:center;min-height:38px;font-size:1.02rem;font-weight:850;color:#f5f5f5}
 .add-agent{width:34px;height:34px;padding:0;text-align:center;border-radius:50%}.add-agent:disabled{opacity:.35;cursor:not-allowed}
 .editor-empty,.empty{color:var(--muted);font-size:.84rem;padding:13px;border:1px dashed var(--line-strong);border-radius:8px;background:#121212}
 .checkline{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:#d0d0d0;font-size:.78rem}.checkline input{width:auto;accent-color:var(--red)}
 .memory-settings,.detail-block,.prompt-preview-block{border:1px solid var(--line);background:#121212;border-radius:7px;padding:11px;margin-top:10px}
 .mini-actions,.detail-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+.mini-actions button{border-radius:8px}
 .danger{border-color:rgba(255,93,93,.55);background:rgba(255,93,93,.12);color:#ffb0b0}.danger:hover{background:rgba(255,93,93,.2)}
 .preset-shell{display:grid;grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr);gap:12px;align-items:start}
 .preset-item{padding:10px 11px;cursor:pointer;transition:border-color .14s ease,background .14s ease,transform .14s ease}
@@ -3268,7 +3270,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           if (row.row === MAIN_ROW_INDEX) {
             return `<div class="pipeline-row main">
               <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">Fixed</div></div>
-              <div class="agent-lane"><span class="main-chip">Main Model</span></div>
+              <div class="main-model-label">Main Model</div>
             </div>`;
           }
 
@@ -3967,8 +3969,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           if (row.row === MAIN_ROW_INDEX) {
             return `<div class="pipeline-row main">
               <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">Fixed</div></div>
-              <div class="agent-lane"><span class="main-chip">Main Model</span></div>
-              <button class="add-agent" disabled>+</button>
+              <div class="main-model-label">Main Model</div>
             </div>`;
           }
 
