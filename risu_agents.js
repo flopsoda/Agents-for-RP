@@ -3155,8 +3155,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .error-text{color:#ff9b9b;overflow-wrap:anywhere}
 .help-list{display:grid;gap:9px;font-size:.84rem;color:#cfcfcf}.help-list li{margin-left:18px}
 .pipeline-shell,.inspector-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.6fr);gap:14px;align-items:start}
-.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:10px;align-items:end;margin-bottom:12px}
-.pipeline-preset-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:end;margin-bottom:12px}
+.pipeline-preset-controls select{min-height:49px}
+.pipeline-preset-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;align-items:center;padding-bottom:0}
+.pipeline-preset-actions button{border-radius:8px;min-height:49px}
 .file-input-hidden{display:none}
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
@@ -3725,8 +3727,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <button id="pipeline-duplicate-btn">복제</button>
             <button id="pipeline-rename-btn">이름 변경</button>
             <button id="pipeline-delete-btn" class="danger">삭제</button>
-            <button id="pipeline-export-btn">Pipeline Export</button>
-            <button id="pipeline-import-btn">Pipeline Import</button>
+            <button id="pipeline-export-btn">Export</button>
+            <button id="pipeline-import-btn">Import</button>
             <input id="pipeline-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
           </div>`;
 
