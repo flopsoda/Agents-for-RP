@@ -3156,9 +3156,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .help-list{display:grid;gap:9px;font-size:.84rem;color:#cfcfcf}.help-list li{margin-left:18px}
 .pipeline-shell,.inspector-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.6fr);gap:14px;align-items:start}
 .pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:end;margin-bottom:12px}
-.pipeline-preset-controls select{min-height:49px}
+.pipeline-preset-field{margin-bottom:0}
+.pipeline-preset-controls select{height:49px}
 .pipeline-preset-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;align-items:center;padding-bottom:0}
-.pipeline-preset-actions button{border-radius:8px;min-height:49px}
+.pipeline-preset-actions button{border-radius:8px;height:49px;display:inline-flex;align-items:center;justify-content:center}
 .file-input-hidden{display:none}
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
@@ -3167,6 +3168,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .pipeline-row.main{border-color:#555;background:#1f1f1f}
 .row-label{font-size:.77rem;color:#e8e8e8;font-weight:800}.row-kind{font-size:.68rem;color:var(--muted-2);margin-top:2px}
 .agent-lane{display:flex;gap:8px;flex-wrap:wrap;min-height:38px;align-items:center}
+.post-agent-lane{justify-content:center}
 .agent-card{padding:9px 11px;min-width:152px;max-width:240px;cursor:pointer;transition:border-color .14s ease,background .14s ease,transform .14s ease}
 .agent-card:hover,.agent-card.selected,.preset-item:hover,.preset-item.selected{border-color:var(--red);background:var(--red-soft)}
 .agent-card:hover,.preset-item:hover{transform:translateY(-1px)}
@@ -3278,7 +3280,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const cards = (row.agents || []).map(agent => inspectorAgentCardHtml(agent)).join('');
           return `<div class="pipeline-row">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
-            <div class="agent-lane">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
+            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
           </div>`;
         }).join('');
 
@@ -3716,7 +3718,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         if (!root) return;
         const presets = pipelinePresetStoreState.presets || [];
         root.innerHTML = `
-          <div class="field">
+          <div class="field pipeline-preset-field">
             <label for="pipeline_preset_select">Pipeline Preset</label>
             <select id="pipeline_preset_select">
               ${presets.map(preset =>
@@ -3979,7 +3981,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
           return `<div class="pipeline-row">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
-            <div class="agent-lane">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
+            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
             <button class="add-agent" data-add-row="${row.row}" ${canAdd ? '' : 'disabled'}>+</button>
           </div>`;
         }).join('');
