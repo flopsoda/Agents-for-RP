@@ -1128,6 +1128,9 @@
     const DEFAULT_OUTPUT_POST_SUFFIX =
       '현재 응답 뒤에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
     const DEFAULT_OUTPUT_POST = DEFAULT_OUTPUT_POST_POLISH;
+    const DEFAULT_FINAL_POLISH_SYSTEM_PROMPT =
+      '당신은 RP 응답 최종 다듬기 에이전트입니다.\n' +
+      '메인 모델 응답을 전부 "전라도 사투리"로 바꿔주세요';
 
     const DEFAULT_AGENT_PRESETS = [
       {
@@ -1229,10 +1232,7 @@
         name: '최종 다듬기 에이전트',
         modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
         postMode: POST_MODE_POLISH,
-        systemPrompt:
-          '당신은 RP 응답 최종 다듬기 에이전트입니다.\n' +
-          '메인 모델 응답을 설정, pre-agent 노트, 현재 문맥에 맞게 자연스럽게 검수하고 다듬으세요.\n' +
-          '캐릭터 말투, 세계관, 장면 흐름을 보존하면서 어색한 문장, 중복, OOC 가능성만 조용히 수정하세요.',
+        systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
         outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
       },
     ];
@@ -1350,7 +1350,7 @@
         name: '최종 다듬기 에이전트',
         modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
         postMode: POST_MODE_POLISH,
-        systemPrompt: defaultSystemPromptForMode('post'),
+        systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
         outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
       };
     }
