@@ -2983,6 +2983,8 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .card{padding:16px;margin-bottom:14px}
 .card h2{font-size:.93rem;margin-bottom:12px;color:var(--text);font-weight:800}
 .card p{font-size:.82rem;color:var(--muted)}
+.run-log-control-row{display:flex;justify-content:flex-end;margin:-4px 0 14px}
+.run-log-control-row button{box-shadow:0 1px 0 rgba(255,255,255,.06) inset}
 .collapsible-card summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
 .collapsible-card summary::-webkit-details-marker{display:none}
 .collapsible-card summary h2{margin-bottom:0}
@@ -3059,7 +3061,7 @@ button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell{grid-template-columns:1fr}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}}
+@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell{grid-template-columns:1fr}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}}
 `;
     }
 
@@ -3083,10 +3085,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       </div>
     </div>
     <div class="header-actions">
-      <button id="run-log-toggle-btn" class="${runLog?.runLogEnabled === false ? 'ghost' : 'primary'}">${runLog?.runLogEnabled === false ? 'Run Log: 꺼짐' : 'Run Log: 켜짐'}</button>
-      <button id="run-inspector-tab-btn" class="primary">Run Inspector</button>
       <button id="settings-tab-btn" class="ghost">설정</button>
+      <button id="run-inspector-tab-btn" class="primary">Run Inspector</button>
     </div>
+  </div>
+  <div class="run-log-control-row">
+    <button id="run-log-toggle-btn" class="${runLog?.runLogEnabled === false ? 'ghost' : 'primary'}">${runLog?.runLogEnabled === false ? '최근 실행 결과(Run Log): 꺼짐' : '최근 실행 결과(Run Log): 켜짐'}</button>
   </div>
   <div class="card">
     <h2>최근 실행 결과</h2>
