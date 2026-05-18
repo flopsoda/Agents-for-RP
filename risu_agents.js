@@ -2892,7 +2892,7 @@
       await Risuai.showContainer('fullscreen');
     }
 
-    const menuIcon = '';
+    const menuIcon = '🧠';
 
     await registerLiteUIEntrypoints();
 
@@ -2903,7 +2903,7 @@
       await Promise.all(LEGACY_UI_IDS.map(id => unregisterKnownUIPart(id)));
 
       try {
-        const setting = await Risuai.registerSetting('Agents! 설정', openLiteDashboard, menuIcon, 'none', SETTINGS_UI_ID);
+        const setting = await Risuai.registerSetting('Agents! 설정', openLiteDashboard, menuIcon, 'html', SETTINGS_UI_ID);
         console.log('Agents! setting registered', setting?.id || setting || '');
       } catch (err) {
         console.log(`Agents! setting registration failed: ${err.message}`);
@@ -2913,7 +2913,7 @@
         const button = await Risuai.registerButton({
           name: 'Agents! Run Inspector',
           icon: menuIcon,
-          iconType: 'none',
+          iconType: 'html',
           location: 'hamburger',
           id: HAMBURGER_UI_ID,
         }, openRunInspector);
@@ -2926,7 +2926,7 @@
         const chatButton = await Risuai.registerButton({
           name: 'Agents! 설정',
           icon: menuIcon,
-          iconType: 'none',
+          iconType: 'html',
           location: 'chat',
           id: CHAT_UI_ID,
         }, openLiteDashboard);
