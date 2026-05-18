@@ -3109,7 +3109,14 @@ body{font-family:Roboto,Arial,system-ui,-apple-system,BlinkMacSystemFont,"Segoe 
 h1{font-size:1.22rem;font-weight:800;letter-spacing:0;margin-bottom:2px;display:flex;align-items:center;gap:10px}
 h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--red);box-shadow:0 0 0 1px rgba(255,255,255,.06) inset,13px 6px 0 -4px #fff;display:inline-block;flex:0 0 auto}
 .subtitle{color:var(--muted);font-size:.82rem;max-width:720px}
-.header-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.header-actions{display:flex;justify-content:flex-end}
+.top-tabs{display:inline-flex;align-items:center;border:1px solid var(--line-strong);border-radius:9px;background:var(--surface-2);overflow:hidden}
+.top-tabs button{border:0;border-radius:0;background:transparent;min-height:42px;padding:9px 16px}
+.top-tabs button+button{border-left:1px solid var(--line)}
+.top-tabs button.primary{background:var(--red);color:#fff}
+.top-tabs button.ghost{color:#f1f1f1}
+.top-tabs button:hover{background:var(--surface-3)}
+.top-tabs button.primary:hover{background:var(--red-hover)}
 .status-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .metric,.card,.test-result,.memory-snapshot,.preset-item,.agent-card,.pipeline-row{background:var(--surface);border:1px solid var(--line);border-radius:8px}
 .metric{padding:13px;min-height:72px}
@@ -3231,8 +3238,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       </div>
     </div>
     <div class="header-actions">
-      <button id="settings-tab-btn" class="ghost">설정</button>
-      <button id="run-inspector-tab-btn" class="primary">Run Inspector</button>
+      <div class="top-tabs" role="tablist" aria-label="Agents view">
+        <button id="settings-tab-btn" class="ghost" role="tab" aria-selected="false">설정</button>
+        <button id="run-inspector-tab-btn" class="primary" role="tab" aria-selected="true">Run Inspector</button>
+      </div>
     </div>
   </div>
   <div class="run-log-control-row">
@@ -3589,8 +3598,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       <p class="subtitle">Row 1-4는 메인 모델 전 노트 생성, Row 5는 Main Model, Row 6-9는 응답 후처리입니다.</p>
     </div>
     <div class="header-actions">
-      <button id="settings-tab-btn" class="primary">설정</button>
-      <button id="run-inspector-tab-btn" class="ghost">Run Inspector</button>
+      <div class="top-tabs" role="tablist" aria-label="Agents view">
+        <button id="settings-tab-btn" class="primary" role="tab" aria-selected="true">설정</button>
+        <button id="run-inspector-tab-btn" class="ghost" role="tab" aria-selected="false">Run Inspector</button>
+      </div>
     </div>
   </div>
 
