@@ -16,6 +16,11 @@ This project targets RisuAI plugin development. Use the local reference files in
 - If a required API is not present in `docs/risuai/types/risuai.d.ts`, stop and ask instead of using internal RisuAI APIs.
 - For migration work, read `docs/risuai/migrationGuide.md` first and call out any API 2.x behavior being replaced.
 
+## Implementation Requests
+
+- Only implement code changes when the user explicitly asks for code implementation, a feature, a bug fix, a refactor, or another concrete code change.
+- If the user is asking a question, brainstorming, or discussing possibilities without asking for implementation, answer or discuss first instead of editing code.
+
 ## API v3.0 Rules
 
 - Treat all RisuAI API methods as asynchronous. Always use `await` or `.then()`.

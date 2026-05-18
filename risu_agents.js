@@ -2986,9 +2986,9 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .collapsible-card summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
 .collapsible-card summary::-webkit-details-marker{display:none}
 .collapsible-card summary h2{margin-bottom:0}
-.collapsible-card .collapse-state{font-size:.74rem;color:var(--muted)}
-.collapsible-card .collapse-state::before{content:"펼치기"}
-.collapsible-card[open] .collapse-state::before{content:"접기"}
+.collapsible-card .collapse-state{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.collapsible-card .collapse-state::before{content:"";width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid var(--red)}
+.collapsible-card[open] .collapse-state::before{border-top:0;border-bottom:8px solid var(--red)}
 .collapsible-body{margin-top:12px}
 .kv{display:grid;grid-template-columns:112px minmax(0,1fr);gap:7px 10px;font-size:.8rem}
 .k{color:var(--muted-2)}.v{color:#e6e6e6;overflow-wrap:anywhere}
