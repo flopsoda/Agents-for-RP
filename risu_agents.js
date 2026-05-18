@@ -36,6 +36,12 @@
     const DEFAULT_OLLAMA_GEMINI_PRESET_ID = 'preset-default-ollama-gemini-3-flash';
     const DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID = 'preset-default-ollama-deepseek-v4-flash';
     const DEFAULT_MODEL_PRESET_ID = DEFAULT_OLLAMA_GEMINI_PRESET_ID;
+    const UNSET_MODEL_PRESET_ID = '';
+    const MODEL_PRESET_UNSET_LABEL = '모델 프리셋 설정하지 않음';
+    const PIPELINE_PRESETS_STORAGE_KEY = 'risu_agents_pipeline_presets_v1';
+    const PIPELINE_PRESET_STORE_VERSION = 1;
+    const AGENT_EXPORT_KIND = 'risu-agents.agent-preset';
+    const PIPELINE_EXPORT_KIND = 'risu-agents.pipeline-preset';
     const DEFAULT_PROVIDER_ORDER = ['ollama', 'openai', 'claude', 'google', 'vertex-ai'];
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
@@ -302,7 +308,8 @@
 
     function findModelPreset(presets, id) {
       const list = Array.isArray(presets) ? presets : [];
-      return list.find(preset => preset.id === id) || list[0] || defaultModelPreset({});
+      if (!id) return null;
+      return list.find(preset => preset.id === id) || null;
     }
 
     async function callOpenAICompatibleAgent(conf, messages) {
@@ -1256,6 +1263,107 @@
       return normalizePipelineConfig(pipeline);
     }
 
+    function cloneJson(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function parseMaybeJson(raw, fallback = null) {
+      if (raw === null || raw === undefined || raw === '') return fallback;
+      if (typeof raw === 'string') {
+        try {
+          return JSON.parse(raw);
+        } catch (_) {
+          return fallback;
+        }
+      }
+      return raw;
+    }
+
+    function createPipelinePreset(name, pipeline) {
+      const now = new Date().toISOString();
+      return {
+        id: makeAgentId('pipeline'),
+        name: String(name || '새 파이프라인'),
+        createdAt: now,
+        updatedAt: now,
+        pipeline: cloneJson(pipeline || createEmptyPipeline()),
+      };
+    }
+
+    function normalizePipelinePresetStore(raw, fallbackPipeline, modelPresets = null) {
+      const parsed = parseMaybeJson(raw, null);
+      const sourcePresets = Array.isArray(parsed?.presets) ? parsed.presets : [];
+      const used = new Set();
+      const presets = sourcePresets.map((preset, idx) => {
+        const baseId = String(preset?.id || `pipeline-${idx + 1}`);
+        let id = baseId;
+        while (used.has(id)) id = `${baseId}-${used.size + 1}`;
+        used.add(id);
+        const createdAt = String(preset?.createdAt || new Date().toISOString());
+        return {
+          id,
+          name: String(preset?.name || `Pipeline ${idx + 1}`),
+          createdAt,
+          updatedAt: String(preset?.updatedAt || createdAt),
+          pipeline: normalizePipelineConfig(preset?.pipeline, modelPresets),
+        };
+      });
+
+      if (presets.length === 0) {
+        presets.push(createPipelinePreset('기본 파이프라인', normalizePipelineConfig(fallbackPipeline || defaultPipelineConfig(), modelPresets)));
+      }
+
+      const activePresetId = presets.some(preset => preset.id === parsed?.activePresetId)
+        ? String(parsed.activePresetId)
+        : presets[0].id;
+
+      return {
+        version: PIPELINE_PRESET_STORE_VERSION,
+        activePresetId,
+        presets,
+      };
+    }
+
+    function getActivePipelinePreset(store) {
+      return (store?.presets || []).find(preset => preset.id === store?.activePresetId) || store?.presets?.[0] || null;
+    }
+
+    async function getPipelinePresetStore(conf) {
+      const legacyRaw = await Risuai.getArgument('agents_pipeline_json');
+      let fallbackPipeline = defaultPipelineConfig();
+      if (legacyRaw) {
+        try {
+          fallbackPipeline = normalizePipelineConfig(JSON.parse(String(legacyRaw)), conf?.modelPresets);
+        } catch (err) {
+          if (conf?.debugLog) console.log(`Agents! legacy pipeline JSON parse failed: ${err.message}`);
+        }
+      }
+
+      try {
+        const rawStore = await Risuai.pluginStorage.getItem(PIPELINE_PRESETS_STORAGE_KEY);
+        const store = normalizePipelinePresetStore(rawStore, fallbackPipeline, conf?.modelPresets);
+        if (!rawStore) {
+          await Risuai.pluginStorage.setItem(PIPELINE_PRESETS_STORAGE_KEY, store);
+        }
+        return store;
+      } catch (err) {
+        if (conf?.debugLog) console.log(`Agents! pipeline preset store load failed: ${err.message}`);
+        return normalizePipelinePresetStore(null, fallbackPipeline, conf?.modelPresets);
+      }
+    }
+
+    async function savePipelinePresetStore(store, activePipeline, conf) {
+      const normalizedStore = normalizePipelinePresetStore(store, activePipeline, conf?.modelPresets);
+      const active = getActivePipelinePreset(normalizedStore);
+      if (activePipeline && active) {
+        active.pipeline = normalizePipelineConfig(activePipeline, conf?.modelPresets);
+        active.updatedAt = new Date().toISOString();
+      }
+      await Risuai.pluginStorage.setItem(PIPELINE_PRESETS_STORAGE_KEY, normalizedStore);
+      if (active) await Risuai.setArgument('agents_pipeline_json', JSON.stringify(active.pipeline));
+      return normalizedStore;
+    }
+
     function normalizePipelineConfig(raw, modelPresets = null) {
       const fallback = createEmptyPipeline();
       const sourceRows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
@@ -1284,15 +1392,8 @@
     }
 
     async function getPipelineConfig(conf) {
-      const raw = await Risuai.getArgument('agents_pipeline_json');
-      if (!raw) return normalizePipelineConfig(defaultPipelineConfig(), conf?.modelPresets);
-
-      try {
-        return normalizePipelineConfig(JSON.parse(String(raw)), conf?.modelPresets);
-      } catch (err) {
-        if (conf?.debugLog) console.log(`Agents! pipeline JSON parse failed: ${err.message}`);
-        return defaultPipelineConfig();
-      }
+      const store = await getPipelinePresetStore(conf);
+      return normalizePipelineConfig(getActivePipelinePreset(store)?.pipeline || defaultPipelineConfig(), conf?.modelPresets);
     }
 
     function normalizeAgent(agent, row, column, modelPresets = null) {
@@ -1396,13 +1497,10 @@
 
     function resolveAgentPresetId(agent, modelPresets) {
       const presets = Array.isArray(modelPresets) ? modelPresets : [];
-      if (agent?.modelPresetId && presets.some(preset => preset.id === agent.modelPresetId)) {
-        return String(agent.modelPresetId);
-      }
-      if (agent?.modelPresetId && presets.length === 0) {
-        return String(agent.modelPresetId);
-      }
-      return presets[0]?.id || DEFAULT_MODEL_PRESET_ID;
+      const id = String(agent?.modelPresetId || UNSET_MODEL_PRESET_ID);
+      if (!id) return UNSET_MODEL_PRESET_ID;
+      if (presets.length === 0 || presets.some(preset => preset.id === id)) return id;
+      return UNSET_MODEL_PRESET_ID;
     }
 
     function defaultSystemPromptForMode(mode) {
@@ -1418,6 +1516,7 @@
 
     function resolveAgentConfig(agent, conf) {
       const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+      if (!preset) return null;
       const temperature = parseAgentFloat(preset.temperature, conf.temperature);
       const maxTokens = parseAgentOptionalInt(preset.maxTokens, conf.maxTokens);
       const window = Math.max(1, parseInt(preset.contextWindow || conf.window, 10) || conf.window || 10);
@@ -1459,8 +1558,18 @@
       if (agents.length === 0) return true;
       return agents.some(agent => {
         const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+        if (!preset) return false;
         return Boolean(getProviderApiKey(conf.providerKeys, preset.provider));
       });
+    }
+
+    function hasMissingModelPresetForRows(pipeline, conf, startRow, endRow) {
+      for (let row = startRow; row <= endRow; row += 1) {
+        if (getEnabledAgentsForRow(pipeline, row).some(agent => !findModelPreset(conf.modelPresets, agent.modelPresetId))) {
+          return true;
+        }
+      }
+      return false;
     }
 
     function buildAgentPrompt(agent, context) {
@@ -2229,7 +2338,7 @@
         getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
           if (!agent.includeHistory) return;
           const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
-          const window = Math.max(1, parseInt(preset.contextWindow || conf.window, 10) || conf.window || 10);
+          const window = Math.max(1, parseInt(preset?.contextWindow || conf.window, 10) || conf.window || 10);
           maxWindow = Math.max(maxWindow, window);
         });
       }
@@ -2241,7 +2350,7 @@
       for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
         getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
           const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
-          const window = Math.max(1, parseInt(preset.contextWindow || conf.window, 10) || conf.window || 10);
+          const window = Math.max(1, parseInt(preset?.contextWindow || conf.window, 10) || conf.window || 10);
           maxWindow = Math.max(maxWindow, window);
         });
       }
@@ -2579,6 +2688,19 @@
 
         const rowResults = await Promise.all(agents.map(async (agent) => {
           const agentConf = resolveAgentConfig(agent, conf);
+          if (!agentConf) {
+            const content = '(스킵: 모델 프리셋 미설정)';
+            console.log(`Agents! pre-agent skipped (${agent.name}): model preset not set`);
+            return {
+              ...runAgentMeta(agent, conf),
+              content,
+              ...(keepRunDetails ? { rawOutput: content } : {}),
+              status: 'skipped',
+              failed: true,
+              error: '모델 프리셋 미설정',
+              memoryStatus: agent.memoryEnabled ? 'skipped' : 'disabled',
+            };
+          }
           if (!agentConf.apiKey) {
             const content = `(실패: ${agentConf.provider} provider API key 없음)`;
             console.log(`Agents! pre-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
@@ -2750,6 +2872,20 @@
         if (!agent) continue;
 
         const agentConf = resolveAgentConfig(agent, conf);
+        if (!agentConf) {
+          console.log(`Agents! post-agent skipped (${agent.name}): model preset not set`);
+          if (keepRunDetails) {
+            postResults.push({
+              ...runAgentMeta(agent, conf),
+              status: 'skipped',
+              failed: true,
+              inputResponse: currentResponse,
+              outputResponse: currentResponse,
+              error: '모델 프리셋 미설정',
+            });
+          }
+          continue;
+        }
         if (!agentConf.apiKey) {
           console.log(`Agents! post-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
           if (keepRunDetails) {
@@ -2876,9 +3012,10 @@
     async function openLiteDashboard() {
       console.log('Agents! opening full settings dashboard');
       const conf = await getConfig();
-      const pipeline = await getPipelineConfig(conf);
-      document.body.innerHTML = buildLiteUI(conf, pipeline);
-      setupLiteHandlers(conf, pipeline);
+      const pipelineStore = await getPipelinePresetStore(conf);
+      const pipeline = normalizePipelineConfig(getActivePipelinePreset(pipelineStore)?.pipeline || defaultPipelineConfig(), conf.modelPresets);
+      document.body.innerHTML = buildLiteUI(conf, pipeline, pipelineStore);
+      setupLiteHandlers(conf, pipeline, pipelineStore);
       await Risuai.showContainer('fullscreen');
     }
 
@@ -3018,6 +3155,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .error-text{color:#ff9b9b;overflow-wrap:anywhere}
 .help-list{display:grid;gap:9px;font-size:.84rem;color:#cfcfcf}.help-list li{margin-left:18px}
 .pipeline-shell,.inspector-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.6fr);gap:14px;align-items:start}
+.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:10px;align-items:end;margin-bottom:12px}
+.pipeline-preset-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.file-input-hidden{display:none}
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
 .inspector-shell .pipeline-row{grid-template-columns:92px minmax(0,1fr)}
@@ -3061,7 +3201,7 @@ button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell{grid-template-columns:1fr}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}}
+@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}}
 `;
     }
 
@@ -3153,13 +3293,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const disabled = agent.enabled ? '' : ' disabled';
         const statusClass = result ? result.status || 'success' : 'missing';
         const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
+        const missing = preset ? '' : ' missing';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
         const status = result ? resultStatusLabel(result.status) : '결과 없음';
         const reused = result?.reused ? ' · 재사용됨' : '';
         const postMode = agent.mode === 'post' ? ` · ${postModeLabel(result?.postMode || agent.postMode)}` : '';
-        return `<div class="agent-card${selected}${disabled} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
+        return `<div class="agent-card${selected}${disabled}${missing} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(preset.name || preset.model || 'model preset')} · ${escHtml(status)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
+          <div class="agent-meta">${escHtml(preset ? (preset.name || preset.model || 'model preset') : '모델 미설정')} · ${escHtml(status)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
         </div>`;
       }
 
@@ -3432,7 +3573,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       </div>`;
     }
 
-    function buildLiteUI(conf, pipeline) {
+    function buildLiteUI(conf, pipeline, pipelineStore) {
       return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>${youtubeThemeStyles()}</style></head><body>
 <div class="wrap">
@@ -3451,6 +3592,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
   <div class="card">
     <h2>Pipeline Builder</h2>
+    <div id="pipeline-preset-controls" class="pipeline-preset-controls"></div>
     <div class="pipeline-shell">
       <div id="pipeline-rows" class="pipeline-rows"></div>
       <div id="agent-editor" class="card" style="margin-bottom:0"></div>
@@ -3515,17 +3657,20 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return null;
     }
 
-    function setupLiteHandlers(initialConf, initialPipeline) {
+    function setupLiteHandlers(initialConf, initialPipeline, initialPipelineStore) {
       let modelPresetsState = normalizeModelPresets(JSON.parse(JSON.stringify(initialConf.modelPresets || [])), initialConf);
       let providerKeysState = { ...(initialConf.providerKeys || {}) };
       let selectedPresetId = modelPresetsState[0]?.id || DEFAULT_MODEL_PRESET_ID;
       let selectedProviderKeyProvider = normalizeProviderValue(modelPresetsState[0]?.provider || initialConf.provider || DEFAULT_AGENT_PROVIDER);
-      let pipelineState = normalizePipelineConfig(JSON.parse(JSON.stringify(initialPipeline)), modelPresetsState);
+      let pipelinePresetStoreState = normalizePipelinePresetStore(initialPipelineStore, initialPipeline, modelPresetsState);
+      let activePipelinePresetId = pipelinePresetStoreState.activePresetId;
+      let pipelineState = normalizePipelineConfig(getActivePipelinePreset(pipelinePresetStoreState)?.pipeline || initialPipeline, modelPresetsState);
       let selectedAgentId = findFirstAgentId(pipelineState);
 
       setupProviderControls();
       setupCredentialFiles();
       setupEndpointExamples();
+      renderPipelinePresetControls();
       renderPipeline();
       renderAgentEditor();
       renderPresetList();
@@ -3536,9 +3681,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('preset-add-btn')?.addEventListener('click', addModelPreset);
       document.getElementById('save-btn')?.addEventListener('click', async () => {
         try {
-          const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState);
+          syncActivePipelinePreset();
+          const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState, pipelinePresetStoreState);
           await saveLiteConfig(next);
+          pipelinePresetStoreState = next.pipelinePresetStore;
+          activePipelinePresetId = pipelinePresetStoreState.activePresetId;
           providerKeysState = { ...(next.providerKeys || {}) };
+          renderPipelinePresetControls();
           renderProviderKeyEditor();
           showMsg('저장 완료', true);
         } catch (err) {
@@ -3548,6 +3697,256 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('close-btn')?.addEventListener('click', async () => {
           await Risuai.hideContainer();
       });
+
+      function syncActivePipelinePreset() {
+        const active = pipelinePresetStoreState.presets.find(preset => preset.id === activePipelinePresetId) || pipelinePresetStoreState.presets[0];
+        if (!active) return;
+        active.pipeline = normalizePipelineConfig(pipelineState, modelPresetsState);
+        active.updatedAt = new Date().toISOString();
+        pipelinePresetStoreState.activePresetId = active.id;
+        activePipelinePresetId = active.id;
+      }
+
+      function renderPipelinePresetControls() {
+        const root = document.getElementById('pipeline-preset-controls');
+        if (!root) return;
+        const presets = pipelinePresetStoreState.presets || [];
+        root.innerHTML = `
+          <div class="field">
+            <label for="pipeline_preset_select">Pipeline Preset</label>
+            <select id="pipeline_preset_select">
+              ${presets.map(preset =>
+                `<option value="${escHtml(preset.id)}" ${preset.id === activePipelinePresetId ? 'selected' : ''}>${escHtml(preset.name)}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="pipeline-preset-actions">
+            <button id="pipeline-new-btn">새 파이프라인</button>
+            <button id="pipeline-duplicate-btn">복제</button>
+            <button id="pipeline-rename-btn">이름 변경</button>
+            <button id="pipeline-delete-btn" class="danger">삭제</button>
+            <button id="pipeline-export-btn">Pipeline Export</button>
+            <button id="pipeline-import-btn">Pipeline Import</button>
+            <input id="pipeline-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
+          </div>`;
+
+        document.getElementById('pipeline_preset_select')?.addEventListener('change', (event) => {
+          syncActivePipelinePreset();
+          activePipelinePresetId = event.target.value;
+          pipelinePresetStoreState.activePresetId = activePipelinePresetId;
+          pipelineState = normalizePipelineConfig(getActivePipelinePreset(pipelinePresetStoreState)?.pipeline || createEmptyPipeline(), modelPresetsState);
+          selectedAgentId = findFirstAgentId(pipelineState);
+          renderPipelinePresetControls();
+          renderPipeline();
+          renderAgentEditor();
+        });
+        document.getElementById('pipeline-new-btn')?.addEventListener('click', addPipelinePreset);
+        document.getElementById('pipeline-duplicate-btn')?.addEventListener('click', duplicatePipelinePreset);
+        document.getElementById('pipeline-rename-btn')?.addEventListener('click', renamePipelinePreset);
+        document.getElementById('pipeline-delete-btn')?.addEventListener('click', deletePipelinePreset);
+        document.getElementById('pipeline-export-btn')?.addEventListener('click', exportPipelinePreset);
+        document.getElementById('pipeline-import-btn')?.addEventListener('click', () => document.getElementById('pipeline-import-file')?.click());
+        document.getElementById('pipeline-import-file')?.addEventListener('change', importPipelinePresetFile);
+      }
+
+      function addPipelinePreset() {
+        syncActivePipelinePreset();
+        const preset = createPipelinePreset(`새 파이프라인 ${pipelinePresetStoreState.presets.length + 1}`, createEmptyPipeline());
+        pipelinePresetStoreState.presets.push(preset);
+        activePipelinePresetId = preset.id;
+        pipelinePresetStoreState.activePresetId = preset.id;
+        pipelineState = normalizePipelineConfig(preset.pipeline, modelPresetsState);
+        selectedAgentId = null;
+        renderPipelinePresetControls();
+        renderPipeline();
+        renderAgentEditor();
+      }
+
+      function duplicatePipelinePreset() {
+        syncActivePipelinePreset();
+        const active = getActivePipelinePreset(pipelinePresetStoreState);
+        if (!active) return;
+        const preset = createPipelinePreset(`${active.name} 복사본`, active.pipeline);
+        pipelinePresetStoreState.presets.push(preset);
+        activePipelinePresetId = preset.id;
+        pipelinePresetStoreState.activePresetId = preset.id;
+        pipelineState = normalizePipelineConfig(preset.pipeline, modelPresetsState);
+        selectedAgentId = findFirstAgentId(pipelineState);
+        renderPipelinePresetControls();
+        renderPipeline();
+        renderAgentEditor();
+      }
+
+      function renamePipelinePreset() {
+        const active = getActivePipelinePreset(pipelinePresetStoreState);
+        if (!active) return;
+        const nextName = window.prompt('Pipeline Preset 이름', active.name);
+        if (nextName === null) return;
+        const trimmed = nextName.trim();
+        if (!trimmed) {
+          showMsg('파이프라인 이름을 입력하세요.', false);
+          return;
+        }
+        active.name = trimmed;
+        active.updatedAt = new Date().toISOString();
+        renderPipelinePresetControls();
+      }
+
+      function deletePipelinePreset() {
+        if ((pipelinePresetStoreState.presets || []).length <= 1) {
+          showMsg('최소 1개의 파이프라인 프리셋은 필요합니다.', false);
+          return;
+        }
+        const active = getActivePipelinePreset(pipelinePresetStoreState);
+        if (!active) return;
+        if (!window.confirm(`"${active.name}" 파이프라인을 삭제할까요?`)) return;
+        pipelinePresetStoreState.presets = pipelinePresetStoreState.presets.filter(preset => preset.id !== active.id);
+        const next = pipelinePresetStoreState.presets[0];
+        activePipelinePresetId = next.id;
+        pipelinePresetStoreState.activePresetId = next.id;
+        pipelineState = normalizePipelineConfig(next.pipeline, modelPresetsState);
+        selectedAgentId = findFirstAgentId(pipelineState);
+        renderPipelinePresetControls();
+        renderPipeline();
+        renderAgentEditor();
+      }
+
+      function exportPipelinePreset() {
+        syncActivePipelinePreset();
+        const active = getActivePipelinePreset(pipelinePresetStoreState);
+        if (!active) return;
+        downloadJsonFile(`agents-pipeline-${safeFilePart(active.name)}.json`, {
+          kind: PIPELINE_EXPORT_KIND,
+          version: 1,
+          name: active.name,
+          exportedAt: new Date().toISOString(),
+          pipeline: pipelineForExport(active.pipeline),
+        });
+        showMsg('Pipeline preset JSON을 내보냈습니다.', true);
+      }
+
+      async function importPipelinePresetFile(event) {
+        const input = event.target;
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+        try {
+          const payload = JSON.parse(await file.text());
+          if (payload?.kind !== PIPELINE_EXPORT_KIND || !payload.pipeline) {
+            throw new Error('Agents! pipeline preset JSON이 아닙니다.');
+          }
+          syncActivePipelinePreset();
+          const imported = pipelineForImport(payload.pipeline);
+          const preset = createPipelinePreset(String(payload.name || file.name.replace(/\.json$/i, '') || 'Imported Pipeline'), imported);
+          pipelinePresetStoreState.presets.push(preset);
+          activePipelinePresetId = preset.id;
+          pipelinePresetStoreState.activePresetId = preset.id;
+          pipelineState = normalizePipelineConfig(preset.pipeline, modelPresetsState);
+          selectedAgentId = findFirstAgentId(pipelineState);
+          renderPipelinePresetControls();
+          renderPipeline();
+          renderAgentEditor();
+          showMsg('Pipeline preset을 가져왔습니다. 저장 버튼을 눌러 적용하세요.', true);
+        } catch (err) {
+          showMsg(`Pipeline import 오류: ${err.message}`, false);
+        }
+      }
+
+      function exportAgentPreset(agent) {
+        if (!agent) return;
+        downloadJsonFile(`agents-agent-${safeFilePart(agent.name)}.json`, {
+          kind: AGENT_EXPORT_KIND,
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          agent: agentForExport(agent),
+        });
+        showMsg('Agent preset JSON을 내보냈습니다.', true);
+      }
+
+      async function importAgentPresetFile(event, targetAgent = null) {
+        const input = event.target;
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+        try {
+          const payload = JSON.parse(await file.text());
+          if (payload?.kind !== AGENT_EXPORT_KIND || !payload.agent) {
+            throw new Error('Agents! agent preset JSON이 아닙니다.');
+          }
+          const targetRow = targetAgent?.row ?? firstEditableRow();
+          if (targetRow === MAIN_ROW_INDEX) throw new Error('Main Model row에는 에이전트를 추가할 수 없습니다.');
+          const row = pipelineState.rows[targetRow];
+          if (!row) throw new Error('가져올 row를 찾을 수 없습니다.');
+          if (targetRow > MAIN_ROW_INDEX && row.agents.length > 0) {
+            throw new Error('Post row에는 에이전트를 1개만 둘 수 있습니다.');
+          }
+          const imported = agentForImport(payload.agent, targetRow, row.agents.length);
+          row.agents.push(imported);
+          selectedAgentId = imported.id;
+          pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState);
+          renderPipeline();
+          renderAgentEditor();
+          showMsg('Agent preset을 가져왔습니다. 저장 버튼을 눌러 적용하세요.', true);
+        } catch (err) {
+          showMsg(`Agent import 오류: ${err.message}`, false);
+        }
+      }
+
+      function firstEditableRow() {
+        const selected = findAgentById(pipelineState, selectedAgentId);
+        if (selected) return selected.row;
+        return 0;
+      }
+
+      function pipelineForExport(pipeline) {
+        const exported = normalizePipelineConfig(pipeline, modelPresetsState);
+        exported.rows.forEach((row) => {
+          row.agents = (row.agents || []).map(agentForExport);
+        });
+        return exported;
+      }
+
+      function pipelineForImport(pipeline) {
+        const imported = normalizePipelineConfig(pipeline, []);
+        imported.rows.forEach((row) => {
+          row.agents = (row.agents || []).map((agent, idx) => agentForImport(agent, row.row, idx));
+        });
+        return normalizePipelineConfig(imported, []);
+      }
+
+      function agentForExport(agent) {
+        const exported = cloneJson(agent);
+        exported.modelPresetId = UNSET_MODEL_PRESET_ID;
+        return exported;
+      }
+
+      function agentForImport(agent, row, column) {
+        return normalizeAgent({
+          ...cloneJson(agent),
+          id: makeAgentId(row < MAIN_ROW_INDEX ? 'pre' : 'post'),
+          modelPresetId: UNSET_MODEL_PRESET_ID,
+        }, row, column, []);
+      }
+
+      function downloadJsonFile(filename, data) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      function safeFilePart(value) {
+        return String(value || 'preset')
+          .trim()
+          .replace(/[\\/:*?"<>|]+/g, '-')
+          .replace(/\s+/g, '-')
+          .slice(0, 80) || 'preset';
+      }
 
       function renderPipeline() {
         const root = document.getElementById('pipeline-rows');
@@ -3589,11 +3988,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const selected = agent.id === selectedAgentId ? ' selected' : '';
         const disabled = agent.enabled ? '' : ' disabled';
         const preset = findModelPreset(modelPresetsState, agent.modelPresetId);
-        const model = preset.name || preset.model || 'model preset';
-        const context = preset.contextWindow || 'ctx';
+        const missing = preset ? '' : ' missing';
+        const model = preset ? (preset.name || preset.model || 'model preset') : '모델 미설정';
+        const context = preset?.contextWindow || '-';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
         const postMode = agent.mode === 'post' ? ` · ${postModeLabel(agent.postMode)}` : '';
-        return `<div class="agent-card${selected}${disabled}" data-agent-id="${escHtml(agent.id)}">
+        return `<div class="agent-card${selected}${disabled}${missing}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
           <div class="agent-meta">${escHtml(model)} · ${escHtml(context)}${escHtml(memory)}${escHtml(postMode)}</div>
         </div>`;
@@ -3604,7 +4004,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         if (!root) return;
         const agent = findAgentById(pipelineState, selectedAgentId);
         if (!agent) {
-          root.innerHTML = '<h2>Agent Editor</h2><div class="editor-empty">에이전트 카드를 선택하거나 + 버튼으로 새 에이전트를 추가하세요.</div>';
+          root.innerHTML = `<h2>Agent Editor</h2>
+            <div class="editor-empty">에이전트 카드를 선택하거나 + 버튼으로 새 에이전트를 추가하세요.</div>
+            <div class="mini-actions">
+              <button id="agent-import-btn">Agent Import</button>
+              <input id="agent-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
+            </div>`;
+          document.getElementById('agent-import-btn')?.addEventListener('click', () => document.getElementById('agent-import-file')?.click());
+          document.getElementById('agent-import-file')?.addEventListener('change', (event) => importAgentPresetFile(event, null));
           return;
         }
 
@@ -3633,6 +4040,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${memoryEditor}
           <div class="mini-actions">
             <button id="agent-preview-btn">프롬프트 확인</button>
+            <button id="agent-export-btn">Agent Export</button>
+            <button id="agent-import-btn">Agent Import</button>
+            <input id="agent-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
             <button id="agent-left-btn">←</button>
             <button id="agent-right-btn">→</button>
             <button id="agent-delete-btn" class="danger">삭제</button>
@@ -3681,6 +4091,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         });
 
         document.getElementById('agent-preview-btn')?.addEventListener('click', () => showPromptPreview(agent));
+        document.getElementById('agent-export-btn')?.addEventListener('click', () => exportAgentPreset(agent));
+        document.getElementById('agent-import-btn')?.addEventListener('click', () => document.getElementById('agent-import-file')?.click());
+        document.getElementById('agent-import-file')?.addEventListener('change', (event) => importAgentPresetFile(event, agent));
         document.getElementById('agent-left-btn')?.addEventListener('click', () => moveAgent(agent, -1));
         document.getElementById('agent-right-btn')?.addEventListener('click', () => moveAgent(agent, 1));
         document.getElementById('agent-delete-btn')?.addEventListener('click', () => deleteAgent(agent));
@@ -3743,7 +4156,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <div class="prompt-modal-head">
               <div>
                 <h2>프롬프트 확인</h2>
-                <div class="prompt-preview-meta">${escHtml(agent.name)} · Row ${escHtml(agent.row + 1)} · ${escHtml(modeLabel)}${escHtml(postModeText)} · ${escHtml(preset.name || preset.model)}</div>
+                <div class="prompt-preview-meta">${escHtml(agent.name)} · Row ${escHtml(agent.row + 1)} · ${escHtml(modeLabel)}${escHtml(postModeText)} · ${escHtml(preset ? (preset.name || preset.model) : '모델 미설정')}</div>
               </div>
               <button id="prompt-preview-close" class="ghost">닫기</button>
             </div>
@@ -3776,7 +4189,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           systemPrompt: defaultSystemPromptForMode(mode),
           outputInstruction: mode === 'pre' ? DEFAULT_OUTPUT_PRE : DEFAULT_OUTPUT_POST,
           postMode: POST_MODE_POLISH,
-          modelPresetId: modelPresetsState[0]?.id || DEFAULT_MODEL_PRESET_ID,
+          modelPresetId: UNSET_MODEL_PRESET_ID,
         }, rowIndex, row.agents.length);
 
         row.agents.push(agent);
@@ -3994,13 +4407,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           return;
         }
         modelPresetsState = modelPresetsState.filter(item => item.id !== preset.id);
-        const fallbackId = modelPresetsState[0].id;
         pipelineState.rows.forEach((row) => {
           row.agents.forEach((agent) => {
-            if (agent.modelPresetId === preset.id) agent.modelPresetId = fallbackId;
+            if (agent.modelPresetId === preset.id) agent.modelPresetId = UNSET_MODEL_PRESET_ID;
           });
         });
-        selectedPresetId = fallbackId;
+        selectedPresetId = modelPresetsState[0].id;
         renderPipeline();
         renderAgentEditor();
         renderPresetList();
@@ -4010,6 +4422,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       async function testSelectedPreset() {
         const preset = findModelPreset(modelPresetsState, selectedPresetId);
+        if (!preset) {
+          showMsg('테스트할 모델 프리셋을 선택하세요.', false);
+          return;
+        }
         const conf = {
           provider: preset.provider,
           baseUrl: normalizeUrl(preset.baseUrl || DEFAULT_AGENT_BASE_URL),
@@ -4037,7 +4453,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     }
 
     function modelPresetSelect(id, selectedId, presets) {
-      return `<select id="${id}">${presets.map((preset) =>
+      return `<select id="${id}">
+        <option value="${UNSET_MODEL_PRESET_ID}" ${!selectedId ? 'selected' : ''}>${MODEL_PRESET_UNSET_LABEL}</option>
+        ${presets.map((preset) =>
         `<option value="${escHtml(preset.id)}" ${preset.id === selectedId ? 'selected' : ''}>${escHtml(preset.name)} - ${escHtml(preset.model)}</option>`
       ).join('')}</select>`;
     }
@@ -4097,9 +4515,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       ).join('')}</select>`;
     }
 
-    function collectLiteConfig(initialConf, pipeline, modelPresets, providerKeys) {
+    function collectLiteConfig(initialConf, pipeline, modelPresets, providerKeys, pipelinePresetStore) {
       const normalizedPresets = normalizeModelPresets(modelPresets, initialConf);
       const firstPreset = normalizedPresets[0] || defaultModelPreset(initialConf);
+      const normalizedPipelineStore = normalizePipelinePresetStore(pipelinePresetStore, pipeline, normalizedPresets);
+      const active = getActivePipelinePreset(normalizedPipelineStore);
+      if (active) {
+        active.pipeline = normalizePipelineConfig(pipeline, normalizedPresets);
+        active.updatedAt = new Date().toISOString();
+      }
       const normalizedKeys = {};
       Object.keys(providerKeys || {}).forEach((key) => {
         const provider = normalizeProviderValue(key);
@@ -4115,7 +4539,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
         debugLog: parseBool(getInputValue('agents_debug_log'), true),
-        pipeline: normalizePipelineConfig(pipeline, normalizedPresets),
+        pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
+        pipelinePresetStore: normalizedPipelineStore,
         modelPresets: normalizedPresets,
         providerKeys: normalizedKeys,
       };
@@ -4130,7 +4555,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
       await Risuai.setArgument('agents_context_window', String(conf.window));
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
-      await Risuai.setArgument('agents_pipeline_json', JSON.stringify(conf.pipeline));
+      conf.pipelinePresetStore = await savePipelinePresetStore(conf.pipelinePresetStore, conf.pipeline, conf);
       await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
       await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
     }
@@ -4673,7 +5098,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           return injectedMessages;
         }
 
-        if (!hasUsableProviderKeyForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
+        if (!hasUsableProviderKeyForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)
+          && !hasMissingModelPresetForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
           console.log('Agents!: provider API key not set — pre-agent pipeline skipped');
           lastPipelineRun = createRunLogBase(type, pipeline, conf, runScope, 'skipped', 'pre-agent provider API key not set');
           lastPipelineRun.userInput = getUserInput(chatContext.messages);
@@ -4729,7 +5155,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           return content;
         }
 
-        if (!hasUsableProviderKeyForRows(pipeline, conf, MAIN_ROW_INDEX + 1, PIPELINE_ROW_COUNT - 1)) {
+        if (!hasUsableProviderKeyForRows(pipeline, conf, MAIN_ROW_INDEX + 1, PIPELINE_ROW_COUNT - 1)
+          && !hasMissingModelPresetForRows(pipeline, conf, MAIN_ROW_INDEX + 1, PIPELINE_ROW_COUNT - 1)) {
           console.log('Agents!: provider API key not set — post-agent pipeline skipped');
           if (lastPipelineRun) {
             lastPipelineRun.status = 'post-skipped';
