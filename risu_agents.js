@@ -1127,7 +1127,7 @@
     const POST_MODE_SUFFIX = 'suffix';
     const POST_MODES = [POST_MODE_POLISH, POST_MODE_PREFIX, POST_MODE_SUFFIX];
     const DEFAULT_OUTPUT_PRE =
-      '간결한 불릿 포인트 메모만 작성하세요. 최종 RP 응답은 작성하지 마세요.';
+      '간결한 불릿 포인트로 관찰과 제안만 정리하세요. 실제 RP 본문이나 최종 응답 문장은 작성하지 마세요.';
     const DEFAULT_OUTPUT_POST_POLISH =
       '메인 모델 응답을 수정한 최종 사용자 응답만 출력하세요. 분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.';
     const DEFAULT_OUTPUT_POST_PREFIX =
