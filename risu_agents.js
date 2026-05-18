@@ -2983,7 +2983,7 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .card{padding:16px;margin-bottom:14px}
 .card h2{font-size:.93rem;margin-bottom:12px;color:var(--text);font-weight:800}
 .card p{font-size:.82rem;color:var(--muted)}
-.run-log-control-row{display:flex;justify-content:flex-end;margin:-4px 0 14px}
+.run-log-control-row{display:flex;justify-content:flex-start;margin:-4px 0 14px}
 .run-log-control-row button{box-shadow:0 1px 0 rgba(255,255,255,.06) inset}
 .collapsible-card summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
 .collapsible-card summary::-webkit-details-marker{display:none}
