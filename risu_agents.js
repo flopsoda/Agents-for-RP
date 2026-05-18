@@ -9,8 +9,8 @@
 //@arg agents_temperature string Analysis agent temperature (default: 0.7)
 //@arg agents_max_tokens string Analysis agent max tokens (blank = provider default)
 //@arg agents_context_window int Recent messages per agent (default: 10)
-//@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: true)
-//@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: true)
+//@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: false)
+//@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
 //@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
 //@arg agents_model_presets_json string Model presets JSON
 //@arg agents_provider_keys_json string Provider API keys JSON
@@ -78,8 +78,8 @@
       const temperature = parseFloat((await Risuai.getArgument('agents_temperature')) || '0.7');
       const maxTokens = parseOptionalInt(await Risuai.getArgument('agents_max_tokens'));
       const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
-      const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), true);
-      const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), true);
+      const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), false);
+      const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), false);
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -2214,7 +2214,7 @@
     }
 
     function isRunLogEnabled(conf) {
-      return conf?.runLogEnabled !== false;
+      return conf?.runLogEnabled === true;
     }
 
     function createRunLogBase(type, pipeline, conf, scope, status = 'running', reason = '') {
@@ -3171,11 +3171,15 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
 .pipeline-row.main{grid-template-columns:92px minmax(0,1fr);position:relative}
+.pipeline-row.post-filled{grid-template-columns:92px minmax(0,1fr);position:relative;min-height:60px}
 .inspector-shell .pipeline-row{grid-template-columns:92px minmax(0,1fr)}
+.inspector-shell .pipeline-row.post-filled{grid-template-columns:92px minmax(0,1fr)}
 .pipeline-row.main{border-color:#555;background:#1f1f1f}
 .row-label{font-size:.77rem;color:#e8e8e8;font-weight:800}.row-kind{font-size:.68rem;color:var(--muted-2);margin-top:2px}
 .agent-lane{display:flex;gap:8px;flex-wrap:wrap;min-height:38px;align-items:center}
 .post-agent-lane{justify-content:center}
+.pipeline-row.post-filled .post-agent-lane{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(240px,calc(100% - 132px))}
+.pipeline-row.post-filled .agent-card{max-width:100%;width:100%}
 .agent-card{padding:9px 11px;min-width:152px;max-width:240px;cursor:pointer;transition:border-color .14s ease,background .14s ease,transform .14s ease}
 .agent-card:hover,.agent-card.selected,.preset-item:hover,.preset-item.selected{border-color:var(--red);background:var(--red-soft)}
 .agent-card:hover,.preset-item:hover{transform:translateY(-1px)}
@@ -3183,7 +3187,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .agent-name,.preset-title{font-size:.82rem;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-meta,.preset-meta{font-size:.69rem;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .preset-meta{overflow-wrap:anywhere;white-space:normal}
-.main-model-label{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:1.02rem;font-weight:850;color:#f5f5f5;white-space:nowrap}
+.main-model-label{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:1.14rem;font-weight:850;color:#f5f5f5;white-space:nowrap}
 .add-agent{width:34px;height:34px;padding:0;text-align:center;border-radius:50%}.add-agent:disabled{opacity:.35;cursor:not-allowed}
 .editor-empty,.empty{color:var(--muted);font-size:.84rem;padding:13px;border:1px dashed var(--line-strong);border-radius:8px;background:#121212}
 .checkline{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:#d0d0d0;font-size:.78rem}.checkline input{width:auto;accent-color:var(--red)}
@@ -3287,7 +3291,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
           const mode = row.row < MAIN_ROW_INDEX ? 'Pre' : 'Post';
           const cards = (row.agents || []).map(agent => inspectorAgentCardHtml(agent)).join('');
-          return `<div class="pipeline-row">
+          const postFilled = row.row > MAIN_ROW_INDEX && Boolean(cards);
+          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
             <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
           </div>`;
@@ -3989,11 +3994,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const mode = row.row < MAIN_ROW_INDEX ? 'Pre' : 'Post';
           const canAdd = row.row < MAIN_ROW_INDEX || row.agents.length === 0;
           const cards = row.agents.map(agent => agentCardHtml(agent)).join('');
+          const postFilled = row.row > MAIN_ROW_INDEX && Boolean(cards);
 
-          return `<div class="pipeline-row">
+          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
             <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
-            <button class="add-agent" data-add-row="${row.row}" ${canAdd ? '' : 'disabled'}>+</button>
+            ${postFilled ? '' : `<button class="add-agent" data-add-row="${row.row}" ${canAdd ? '' : 'disabled'}>+</button>`}
           </div>`;
         }).join('');
 
@@ -4563,7 +4569,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         temperature: parseAgentFloat(firstPreset.temperature, 0.7),
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
-        debugLog: parseBool(getInputValue('agents_debug_log'), true),
+        debugLog: parseBool(getInputValue('agents_debug_log'), false),
         pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
         pipelinePresetStore: normalizedPipelineStore,
         modelPresets: normalizedPresets,
