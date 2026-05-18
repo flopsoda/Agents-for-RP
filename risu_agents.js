@@ -3877,16 +3877,25 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           if (targetRow === MAIN_ROW_INDEX) throw new Error('Main Model row에는 에이전트를 추가할 수 없습니다.');
           const row = pipelineState.rows[targetRow];
           if (!row) throw new Error('가져올 row를 찾을 수 없습니다.');
-          if (targetRow > MAIN_ROW_INDEX && row.agents.length > 0) {
+          if (!targetAgent && targetRow > MAIN_ROW_INDEX && row.agents.length > 0) {
             throw new Error('Post row에는 에이전트를 1개만 둘 수 있습니다.');
           }
-          const imported = agentForImport(payload.agent, targetRow, row.agents.length);
-          row.agents.push(imported);
+
+          let imported;
+          if (targetAgent) {
+            const targetIndex = row.agents.findIndex(agent => agent.id === targetAgent.id);
+            if (targetIndex < 0) throw new Error('교체할 에이전트를 찾을 수 없습니다.');
+            imported = agentForImport(payload.agent, targetRow, targetIndex, targetAgent.id);
+            row.agents[targetIndex] = imported;
+          } else {
+            imported = agentForImport(payload.agent, targetRow, row.agents.length);
+            row.agents.push(imported);
+          }
           selectedAgentId = imported.id;
           pipelineState = normalizePipelineConfig(pipelineState, modelPresetsState);
           renderPipeline();
           renderAgentEditor();
-          showMsg('Agent preset을 가져왔습니다. 저장 버튼을 눌러 적용하세요.', true);
+          showMsg(targetAgent ? 'Agent preset으로 현재 에이전트를 교체했습니다. 저장 버튼을 눌러 적용하세요.' : 'Agent preset을 가져왔습니다. 저장 버튼을 눌러 적용하세요.', true);
         } catch (err) {
           showMsg(`Agent import 오류: ${err.message}`, false);
         }
@@ -3920,10 +3929,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         return exported;
       }
 
-      function agentForImport(agent, row, column) {
+      function agentForImport(agent, row, column, existingId = '') {
         return normalizeAgent({
           ...cloneJson(agent),
-          id: makeAgentId(row < MAIN_ROW_INDEX ? 'pre' : 'post'),
+          id: existingId || makeAgentId(row < MAIN_ROW_INDEX ? 'pre' : 'post'),
           modelPresetId: UNSET_MODEL_PRESET_ID,
         }, row, column, []);
       }
@@ -4040,12 +4049,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${memoryEditor}
           <div class="mini-actions">
             <button id="agent-preview-btn">프롬프트 확인</button>
-            <button id="agent-export-btn">Agent Export</button>
-            <button id="agent-import-btn">Agent Import</button>
-            <input id="agent-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
             <button id="agent-left-btn">←</button>
             <button id="agent-right-btn">→</button>
             <button id="agent-delete-btn" class="danger">삭제</button>
+            <button id="agent-export-btn">Export</button>
+            <button id="agent-import-btn">Import</button>
+            <input id="agent-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
           </div>`;
 
         bindEditorFields(agent);
