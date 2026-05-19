@@ -56,6 +56,7 @@
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
+    const AGENT_LLM_TIMEOUT_MS = 120000;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: ['gemini-3-flash-preview:cloud', 'deepseek-v4-pro:cloud', 'deepseek-v4-flash:cloud'],
@@ -322,14 +323,14 @@
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'OpenAI-compatible chat/completions start', url, payload);
-      const res = await Risuai.nativeFetch(url, {
+      const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${conf.apiKey}`,
+          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', conf.apiKey, conf, 'chat'),
         },
         body: JSON.stringify(payload),
-      });
+      }, 'OpenAI-compatible chat/completions');
       logAgentFetch(conf, `OpenAI-compatible chat/completions response ${res.status}`, url);
 
       if (!res.ok) {
@@ -353,15 +354,15 @@
 
       const url = `${conf.baseUrl}/messages`;
       logAgentFetch(conf, 'Anthropic messages start', url, payload);
-      const res = await Risuai.nativeFetch(url, {
+      const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': conf.apiKey,
+          'x-api-key': await secretFetchHeader('x-api-key', '', conf.apiKey, conf, 'messages'),
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
-      });
+      }, 'Anthropic messages');
       logAgentFetch(conf, `Anthropic messages response ${res.status}`, url);
 
       if (!res.ok) {
@@ -384,14 +385,14 @@
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
-      const res = await Risuai.nativeFetch(url, {
+      const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
+          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', accessToken, conf, 'vertex-chat'),
         },
         body: JSON.stringify(payload),
-      });
+      }, 'Vertex chat/completions');
       logAgentFetch(conf, `Vertex chat/completions response ${res.status}`, url);
 
       if (!res.ok) {
@@ -4666,13 +4667,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (isAnthropicProvider(conf.provider)) {
         const url = `${conf.baseUrl}/models/${conf.model}`;
         logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Anthropic models start', url);
-        const res = await Risuai.nativeFetch(url, {
+        const res = await nativeFetchWithTimeout(url, {
           method: 'GET',
           headers: {
-            'x-api-key': conf.apiKey,
+            'x-api-key': await secretFetchHeader('x-api-key', '', conf.apiKey, conf, 'models-test'),
             'anthropic-version': '2023-06-01',
           },
-        });
+        }, 'Anthropic models test');
         logAgentFetch({ ...conf, debugLog: true }, `LLM auth test Anthropic models response ${res.status}`, url);
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -4690,10 +4691,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       const url = `${conf.baseUrl}/models`;
       logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test OpenAI-compatible models start', url);
-      const res = await Risuai.nativeFetch(url, {
+      const res = await nativeFetchWithTimeout(url, {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${conf.apiKey}` },
-      });
+        headers: {
+          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', conf.apiKey, conf, 'models-test'),
+        },
+      }, 'OpenAI-compatible models test');
       logAgentFetch({ ...conf, debugLog: true }, `LLM auth test OpenAI-compatible models response ${res.status}`, url);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -4959,11 +4962,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         assertion,
       });
 
-      const res = await Risuai.nativeFetch('https://oauth2.googleapis.com/token', {
+      const res = await nativeFetchWithTimeout('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
-      });
+      }, 'Vertex AI access token');
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         throw new Error(`Vertex AI access token 발급 실패: HTTP ${res.status}: ${errText.slice(0, 180)}`);
@@ -5042,6 +5045,56 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     function normalizeUrl(url) {
       return String(url || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '');
+    }
+
+    async function nativeFetchWithTimeout(url, options = {}, label = 'request') {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      let timeoutId = null;
+      const timeoutError = () => new Error(`${label} timed out after ${Math.round(AGENT_LLM_TIMEOUT_MS / 1000)}s`);
+
+      try {
+        if (controller) {
+          timeoutId = setTimeout(() => controller.abort(), AGENT_LLM_TIMEOUT_MS);
+          return await Risuai.nativeFetch(url, {
+            ...options,
+            signal: controller.signal,
+          });
+        }
+
+        return await Promise.race([
+          Risuai.nativeFetch(url, options),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(timeoutError()), AGENT_LLM_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (err) {
+        if (controller?.signal?.aborted || err?.name === 'AbortError') throw timeoutError();
+        throw err;
+      } finally {
+        if (timeoutId !== null) clearTimeout(timeoutId);
+      }
+    }
+
+    async function secretFetchHeader(headerName, prefix, value, conf, purpose) {
+      const secretKey = buildSecretHeaderKey(headerName, conf, purpose);
+      await Risuai.saveSecretHeader(secretKey, prefix, String(value || ''));
+      return { secretHeader: secretKey };
+    }
+
+    function buildSecretHeaderKey(headerName, conf, purpose) {
+      const provider = normalizeProviderValue(conf?.provider || DEFAULT_AGENT_PROVIDER);
+      const scope = `${purpose || 'fetch'}|${provider}|${normalizeUrl(conf?.baseUrl || DEFAULT_AGENT_BASE_URL)}|${headerName}`;
+      return `risu-agents-${provider}-${normalizeProviderValue(headerName)}-${hashString(scope)}`;
+    }
+
+    function hashString(value) {
+      let hash = 2166136261;
+      const text = String(value || '');
+      for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(36);
     }
 
     function exampleApiUrl(conf) {
