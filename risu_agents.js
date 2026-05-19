@@ -3171,6 +3171,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .pipeline-rows,.memory-stack,.preset-list{display:grid;gap:10px}
 .pipeline-row{display:grid;grid-template-columns:92px minmax(0,1fr) 38px;gap:10px;align-items:center;padding:10px}
 .pipeline-row.main{grid-template-columns:92px minmax(0,1fr);position:relative}
+.pipeline-row.empty-row{position:relative}
 .pipeline-row.post-filled{grid-template-columns:92px minmax(0,1fr);position:relative;min-height:60px}
 .inspector-shell .pipeline-row{grid-template-columns:92px minmax(0,1fr)}
 .inspector-shell .pipeline-row.post-filled{grid-template-columns:92px minmax(0,1fr)}
@@ -3180,6 +3181,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .post-agent-lane{justify-content:center}
 .pipeline-row.post-filled .post-agent-lane{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(240px,calc(100% - 132px))}
 .pipeline-row.post-filled .agent-card{max-width:100%;width:100%}
+.pipeline-empty-label{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:calc(100% - 160px);text-align:center;white-space:nowrap;pointer-events:none}
 .agent-card{padding:9px 11px;min-width:152px;max-width:240px;cursor:pointer;transition:border-color .14s ease,background .14s ease,transform .14s ease}
 .agent-card:hover,.agent-card.selected,.preset-item:hover,.preset-item.selected{border-color:var(--red);background:var(--red-soft)}
 .agent-card:hover,.preset-item:hover{transform:translateY(-1px)}
@@ -3292,9 +3294,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const mode = row.row < MAIN_ROW_INDEX ? 'Pre' : 'Post';
           const cards = (row.agents || []).map(agent => inspectorAgentCardHtml(agent)).join('');
           const postFilled = row.row > MAIN_ROW_INDEX && Boolean(cards);
-          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}">
+          const emptyRow = !cards;
+          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}${emptyRow ? ' empty-row' : ''}">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
-            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
+            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub pipeline-empty-label">비어 있음</span>'}</div>
           </div>`;
         }).join('');
 
@@ -3821,7 +3824,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         }
         const active = getActivePipelinePreset(pipelinePresetStoreState);
         if (!active) return;
-        if (!window.confirm(`"${active.name}" 파이프라인을 삭제할까요?`)) return;
+        if (!window.confirm(`"${active.name}" 파이프라인을 정말 삭제할까요?`)) return;
         pipelinePresetStoreState.presets = pipelinePresetStoreState.presets.filter(preset => preset.id !== active.id);
         const next = pipelinePresetStoreState.presets[0];
         activePipelinePresetId = next.id;
@@ -3995,10 +3998,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const canAdd = row.row < MAIN_ROW_INDEX || row.agents.length === 0;
           const cards = row.agents.map(agent => agentCardHtml(agent)).join('');
           const postFilled = row.row > MAIN_ROW_INDEX && Boolean(cards);
+          const emptyRow = !cards;
 
-          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}">
+          return `<div class="pipeline-row${postFilled ? ' post-filled' : ''}${emptyRow ? ' empty-row' : ''}">
             <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">${mode}</div></div>
-            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub">비어 있음</span>'}</div>
+            <div class="agent-lane${row.row > MAIN_ROW_INDEX ? ' post-agent-lane' : ''}">${cards || '<span class="metric-sub pipeline-empty-label">비어 있음</span>'}</div>
             ${postFilled ? '' : `<button class="add-agent" data-add-row="${row.row}" ${canAdd ? '' : 'disabled'}>+</button>`}
           </div>`;
         }).join('');
@@ -4247,6 +4251,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
 
       function deleteAgent(agent) {
+        if (!window.confirm(`"${agent.name}" 에이전트를 정말 삭제할까요?`)) return;
         const row = pipelineState.rows[agent.row];
         row.agents = row.agents.filter(item => item.id !== agent.id);
         selectedAgentId = findFirstAgentId(pipelineState);
