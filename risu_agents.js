@@ -1138,6 +1138,30 @@
     const DEFAULT_FINAL_POLISH_SYSTEM_PROMPT =
       '당신은 RP 응답 최종 다듬기 에이전트입니다.\n' +
       '메인 모델 응답을 전부 "전라도 사투리"로 바꿔주세요';
+    const LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT =
+      '당신은 대사와 말투 에이전트입니다.\n' +
+      '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
+      '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+      '[캐릭터별 발화 기준]\n' +
+      '- 이름: 호칭, 존댓말/반말, 문장 길이, 어휘 수준, 자주 쓰는 어미\n\n' +
+      '[관계별 호칭과 말투]\n' +
+      '- A -> B: 부르는 호칭, 높임/반말, 친밀도나 거리감이 드러나는 방식\n\n' +
+      '[감정별 말투 변화]\n' +
+      '- 이름: 평소 / 화났을 때 / 당황했을 때 / 친밀할 때의 말투 차이\n\n' +
+      '[짧은 어조 샘플]\n' +
+      '- 이름: 1문장 이하의 참고용 샘플. 장면을 진행하는 완성 대사가 아니라 어조 참고용으로만 작성';
+    const DEFAULT_DIALOGUE_SYSTEM_PROMPT =
+      '당신은 대사와 말투 에이전트입니다.\n' +
+      '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
+      '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
+      '[캐릭터별 발화 기준]\n' +
+      '- 이름: 호칭, 존댓말/반말, 문장 길이, 어휘 수준, 자주 쓰는 어미\n\n' +
+      '[관계별 호칭과 말투]\n' +
+      '- A -> B: 부르는 호칭, 높임/반말, 친밀도나 거리감이 드러나는 방식\n\n' +
+      '[감정별 말투 변화]\n' +
+      '- 이름: 평소 / 화났을 때 / 당황했을 때 / 친밀할 때의 말투 차이\n\n' +
+      '[어조 샘플]\n' +
+      '- 이름: 참고용 샘플. 장면을 진행하는 완성 대사가 아니라 어조 참고용으로만 작성';
 
     const DEFAULT_AGENT_PRESETS = [
       {
@@ -1219,18 +1243,7 @@
         column: 0,
         name: '대사 에이전트',
         modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
-        systemPrompt:
-          '당신은 대사와 말투 에이전트입니다.\n' +
-          '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
-          '아래 포맷을 유지하되, 확실한 정보가 없거나 이번 장면에 중요하지 않은 항목은 "(해당 없음)"으로 둡니다.\n\n' +
-          '[캐릭터별 발화 기준]\n' +
-          '- 이름: 호칭, 존댓말/반말, 문장 길이, 어휘 수준, 자주 쓰는 어미\n\n' +
-          '[관계별 호칭과 말투]\n' +
-          '- A -> B: 부르는 호칭, 높임/반말, 친밀도나 거리감이 드러나는 방식\n\n' +
-          '[감정별 말투 변화]\n' +
-          '- 이름: 평소 / 화났을 때 / 당황했을 때 / 친밀할 때의 말투 차이\n\n' +
-          '[짧은 어조 샘플]\n' +
-          '- 이름: 1문장 이하의 참고용 샘플. 장면을 진행하는 완성 대사가 아니라 어조 참고용으로만 작성',
+        systemPrompt: DEFAULT_DIALOGUE_SYSTEM_PROMPT,
       },
       {
         id: 'agent-final-polish',
@@ -1400,6 +1413,7 @@
       const mode = row < MAIN_ROW_INDEX ? 'pre' : 'post';
       const modelPresetId = resolveAgentPresetId(agent, modelPresets);
       const postMode = mode === 'post' ? normalizePostMode(agent?.postMode) : POST_MODE_POLISH;
+      const systemPrompt = normalizeAgentSystemPrompt(agent, mode);
       return {
         id: String(agent?.id || makeAgentId(mode)),
         name: String(agent?.name || (mode === 'pre' ? '새 노트 에이전트' : '새 후처리 에이전트')),
@@ -1407,7 +1421,7 @@
         mode,
         row,
         column: Number.isFinite(Number(agent?.column)) ? Number(agent.column) : column,
-        systemPrompt: String(agent?.systemPrompt || defaultSystemPromptForMode(mode)),
+        systemPrompt,
         outputInstruction: String(agent?.outputInstruction || (mode === 'pre' ? DEFAULT_OUTPUT_PRE : defaultOutputInstructionForPostMode(postMode))),
         modelPresetId,
         ...(mode === 'post' ? { postMode } : {}),
@@ -1421,6 +1435,14 @@
         memoryInstruction: String(agent?.memoryInstruction || ''),
         memoryFormat: String(agent?.memoryFormat || ''),
       };
+    }
+
+    function normalizeAgentSystemPrompt(agent, mode) {
+      const systemPrompt = String(agent?.systemPrompt || defaultSystemPromptForMode(mode));
+      if (agent?.id === 'agent-dialogue' && systemPrompt === LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT) {
+        return DEFAULT_DIALOGUE_SYSTEM_PROMPT;
+      }
+      return systemPrompt;
     }
 
     function normalizePipelineVersion(raw) {
@@ -3750,6 +3772,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <button id="pipeline-duplicate-btn">복제</button>
             <button id="pipeline-rename-btn">이름 변경</button>
             <button id="pipeline-delete-btn" class="danger">삭제</button>
+            <button id="pipeline-disable-all-btn" class="danger">전체 비활성</button>
             <button id="pipeline-export-btn">Export</button>
             <button id="pipeline-import-btn">Import</button>
             <input id="pipeline-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
@@ -3769,6 +3792,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         document.getElementById('pipeline-duplicate-btn')?.addEventListener('click', duplicatePipelinePreset);
         document.getElementById('pipeline-rename-btn')?.addEventListener('click', renamePipelinePreset);
         document.getElementById('pipeline-delete-btn')?.addEventListener('click', deletePipelinePreset);
+        document.getElementById('pipeline-disable-all-btn')?.addEventListener('click', disableAllAgentsInCurrentPipeline);
         document.getElementById('pipeline-export-btn')?.addEventListener('click', exportPipelinePreset);
         document.getElementById('pipeline-import-btn')?.addEventListener('click', () => document.getElementById('pipeline-import-file')?.click());
         document.getElementById('pipeline-import-file')?.addEventListener('change', importPipelinePresetFile);
@@ -3834,6 +3858,22 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         renderPipelinePresetControls();
         renderPipeline();
         renderAgentEditor();
+      }
+
+      function disableAllAgentsInCurrentPipeline() {
+        let changed = false;
+        pipelineState.rows.forEach((row) => {
+          if (row.row === MAIN_ROW_INDEX) return;
+          (row.agents || []).forEach((agent) => {
+            if (agent.enabled !== false) {
+              agent.enabled = false;
+              changed = true;
+            }
+          });
+        });
+        renderPipeline();
+        renderAgentEditor();
+        showMsg(changed ? '전체 에이전트를 비활성화했습니다. 저장 버튼을 눌러 적용하세요.' : '이미 모든 에이전트가 비활성 상태입니다.', true);
       }
 
       function exportPipelinePreset() {
