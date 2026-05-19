@@ -3817,6 +3817,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const root = document.getElementById('pipeline-preset-controls');
         if (!root) return;
         const presets = pipelinePresetStoreState.presets || [];
+        const hasAgents = pipelineHasAgents(pipelineState);
+        const hasEnabledAgents = pipelineHasEnabledAgents(pipelineState);
         root.innerHTML = `
           <div class="field pipeline-preset-field">
             <label for="pipeline_preset_select">Pipeline Preset</label>
@@ -3831,7 +3833,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <button id="pipeline-duplicate-btn">복제</button>
             <button id="pipeline-rename-btn">이름 변경</button>
             <button id="pipeline-delete-btn" class="danger">삭제</button>
-            <button id="pipeline-disable-all-btn" class="danger">전체 비활성</button>
+            <button id="pipeline-toggle-all-btn" class="${hasEnabledAgents ? 'danger' : ''}" ${hasAgents ? '' : 'disabled'}>${hasEnabledAgents ? '전체 비활성' : '전체 활성'}</button>
             <button id="pipeline-export-btn">Export</button>
             <button id="pipeline-import-btn">Import</button>
             <input id="pipeline-import-file" class="file-input-hidden" type="file" accept="application/json,.json">
@@ -3851,10 +3853,24 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         document.getElementById('pipeline-duplicate-btn')?.addEventListener('click', duplicatePipelinePreset);
         document.getElementById('pipeline-rename-btn')?.addEventListener('click', renamePipelinePreset);
         document.getElementById('pipeline-delete-btn')?.addEventListener('click', deletePipelinePreset);
-        document.getElementById('pipeline-disable-all-btn')?.addEventListener('click', disableAllAgentsInCurrentPipeline);
+        document.getElementById('pipeline-toggle-all-btn')?.addEventListener('click', toggleAllAgentsInCurrentPipeline);
         document.getElementById('pipeline-export-btn')?.addEventListener('click', exportPipelinePreset);
         document.getElementById('pipeline-import-btn')?.addEventListener('click', () => document.getElementById('pipeline-import-file')?.click());
         document.getElementById('pipeline-import-file')?.addEventListener('change', importPipelinePresetFile);
+      }
+
+      function pipelineHasAgents(pipeline) {
+        return (pipeline?.rows || []).some((row) => {
+          if (row.row === MAIN_ROW_INDEX) return false;
+          return (row.agents || []).length > 0;
+        });
+      }
+
+      function pipelineHasEnabledAgents(pipeline) {
+        return (pipeline?.rows || []).some((row) => {
+          if (row.row === MAIN_ROW_INDEX) return false;
+          return (row.agents || []).some(agent => agent.enabled !== false);
+        });
       }
 
       function addPipelinePreset() {
@@ -3919,20 +3935,18 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         renderAgentEditor();
       }
 
-      function disableAllAgentsInCurrentPipeline() {
-        let changed = false;
+      function toggleAllAgentsInCurrentPipeline() {
+        const enableAll = !pipelineHasEnabledAgents(pipelineState);
         pipelineState.rows.forEach((row) => {
           if (row.row === MAIN_ROW_INDEX) return;
           (row.agents || []).forEach((agent) => {
-            if (agent.enabled !== false) {
-              agent.enabled = false;
-              changed = true;
-            }
+            agent.enabled = enableAll;
           });
         });
+        renderPipelinePresetControls();
         renderPipeline();
         renderAgentEditor();
-        showMsg(changed ? '전체 에이전트를 비활성화했습니다. 저장 버튼을 눌러 적용하세요.' : '이미 모든 에이전트가 비활성 상태입니다.', true);
+        showMsg(enableAll ? '전체 에이전트를 활성화했습니다. 저장 버튼을 눌러 적용하세요.' : '전체 에이전트를 비활성화했습니다. 저장 버튼을 눌러 적용하세요.', true);
       }
 
       function exportPipelinePreset() {
