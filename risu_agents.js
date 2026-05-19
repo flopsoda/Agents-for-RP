@@ -385,7 +385,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', conf.apiKey, conf, 'chat'),
+          'Authorization': `Bearer ${conf.apiKey}`,
         },
         body: JSON.stringify(payload),
       }, 'OpenAI-compatible chat/completions');
@@ -416,7 +416,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': await secretFetchHeader('x-api-key', '', conf.apiKey, conf, 'messages'),
+          'x-api-key': conf.apiKey,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
@@ -447,7 +447,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', accessToken, conf, 'vertex-chat'),
+          'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(payload),
       }, 'Vertex chat/completions');
@@ -4742,7 +4742,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const res = await nativeFetchWithTimeout(url, {
           method: 'GET',
           headers: {
-            'x-api-key': await secretFetchHeader('x-api-key', '', conf.apiKey, conf, 'models-test'),
+            'x-api-key': conf.apiKey,
             'anthropic-version': '2023-06-01',
           },
         }, 'Anthropic models test');
@@ -4766,7 +4766,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const res = await nativeFetchWithTimeout(url, {
         method: 'GET',
         headers: {
-          'Authorization': await secretFetchHeader('Authorization', 'Bearer ', conf.apiKey, conf, 'models-test'),
+          'Authorization': `Bearer ${conf.apiKey}`,
         },
       }, 'OpenAI-compatible models test');
       logAgentFetch({ ...conf, debugLog: true }, `LLM auth test OpenAI-compatible models response ${res.status}`, url);
@@ -5145,11 +5145,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       } finally {
         if (timeoutId !== null) clearTimeout(timeoutId);
       }
-    }
-
-    async function secretFetchHeader(headerName, prefix, value) {
-      await Risuai.saveSecretHeader(headerName, prefix, String(value || ''));
-      return { secretHeader: headerName };
     }
 
     function exampleApiUrl(conf) {
