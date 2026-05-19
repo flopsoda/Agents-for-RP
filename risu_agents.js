@@ -5147,26 +5147,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
     }
 
-    async function secretFetchHeader(headerName, prefix, value, conf, purpose) {
-      const secretKey = buildSecretHeaderKey(headerName, conf, purpose);
-      await Risuai.saveSecretHeader(secretKey, prefix, String(value || ''));
-      return { secretHeader: secretKey };
-    }
-
-    function buildSecretHeaderKey(headerName, conf, purpose) {
-      const provider = normalizeProviderValue(conf?.provider || DEFAULT_AGENT_PROVIDER);
-      const scope = `${purpose || 'fetch'}|${provider}|${normalizeUrl(conf?.baseUrl || DEFAULT_AGENT_BASE_URL)}|${headerName}`;
-      return `risu-agents-${provider}-${normalizeProviderValue(headerName)}-${hashString(scope)}`;
-    }
-
-    function hashString(value) {
-      let hash = 2166136261;
-      const text = String(value || '');
-      for (let i = 0; i < text.length; i += 1) {
-        hash ^= text.charCodeAt(i);
-        hash = Math.imul(hash, 16777619);
-      }
-      return (hash >>> 0).toString(36);
+    async function secretFetchHeader(headerName, prefix, value) {
+      await Risuai.saveSecretHeader(headerName, prefix, String(value || ''));
+      return { secretHeader: headerName };
     }
 
     function exampleApiUrl(conf) {
