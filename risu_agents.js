@@ -11,7 +11,6 @@
 //@arg agents_context_window int Recent messages per agent (default: 10)
 //@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: false)
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
-//@arg agents_post_delivery_mode string Post-agent delivery mode. blocking/async (default: blocking)
 //@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
 //@arg agents_model_presets_json string Model presets JSON
 //@arg agents_provider_keys_json string Provider API keys JSON
@@ -58,8 +57,6 @@
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
     const AGENT_LLM_TIMEOUT_MS = 120000;
-    const ASYNC_POST_APPLY_ATTEMPTS = 10;
-    const ASYNC_POST_APPLY_DELAY_MS = 500;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: [
@@ -128,9 +125,6 @@
     };
     const PIPELINE_ROW_COUNT = 9;
     const MAIN_ROW_INDEX = 4;
-    const POST_DELIVERY_BLOCKING = 'blocking';
-    const POST_DELIVERY_ASYNC = 'async';
-    const POST_DELIVERY_MODES = [POST_DELIVERY_BLOCKING, POST_DELIVERY_ASYNC];
     let lastPipelineRun = null;
 
     // ── 설정 로드 ─────────────────────────────────────────────────────────────
@@ -145,7 +139,6 @@
       const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
       const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), false);
       const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), false);
-      const postDeliveryMode = normalizePostDeliveryMode(await Risuai.getArgument('agents_post_delivery_mode'));
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -179,7 +172,6 @@
         window,
         debugLog,
         runLogEnabled,
-        postDeliveryMode,
       };
     }
 
@@ -787,28 +779,18 @@
     }
 
     function normalizeStoredChatMessage(item) {
-      const role = storedChatMessageRole(item);
-      if (!role) return null;
-      const content = storedChatMessageData(item).trim();
-      return content ? { role, content } : null;
-    }
-
-    function storedChatMessageRole(item) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
       const rawRole = String(item.role || '').trim().toLowerCase().replace(/[_\s-]+/g, '');
-      if (rawRole === 'user') return 'user';
-      if (['assistant', 'char', 'character', 'bot', 'ai', 'model'].includes(rawRole)) return 'assistant';
-      return '';
-    }
-
-    function isAssistantStoredChatMessage(item) {
-      return storedChatMessageRole(item) === 'assistant';
-    }
-
-    function storedChatMessageData(item) {
-      return typeof item?.data === 'string' || typeof item?.data === 'number'
-        ? String(item.data)
+      const role = rawRole === 'user'
+        ? 'user'
+        : ['assistant', 'char', 'character', 'bot', 'ai', 'model'].includes(rawRole)
+          ? 'assistant'
+          : '';
+      if (!role) return null;
+      const content = typeof item.data === 'string' || typeof item.data === 'number'
+        ? String(item.data).trim()
         : '';
+      return content ? { role, content } : null;
     }
 
     function objectKeysPreview(value) {
@@ -1553,11 +1535,6 @@
         systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
         outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
       };
-    }
-
-    function normalizePostDeliveryMode(value) {
-      const mode = String(value || POST_DELIVERY_BLOCKING).trim().toLowerCase();
-      return POST_DELIVERY_MODES.includes(mode) ? mode : POST_DELIVERY_BLOCKING;
     }
 
     function normalizePostMode(value) {
@@ -2955,10 +2932,10 @@
       return notes;
     }
 
-    async function runPostPipeline(content, conf, pipeline, type, pipelineRun = lastPipelineRun) {
+    async function runPostPipeline(content, conf, pipeline, type) {
       let currentResponse = String(content ?? '');
       const keepRunDetails = isRunLogEnabled(conf);
-      const previousRun = pipelineRun || {
+      const previousRun = lastPipelineRun || {
         type,
         postResults: [],
         settingBlocks: formatSettingBlocks({
@@ -3054,11 +3031,10 @@
         }
       }
 
-      if (pipelineRun) {
-        pipelineRun.postResults = postResults;
-        pipelineRun.status = pipelineRun.preReused ? 'pre-reused' : 'complete';
-        pipelineRun.reason = '';
-        if (keepRunDetails) pipelineRun.finalResponse = currentResponse;
+      if (lastPipelineRun) {
+        lastPipelineRun.postResults = postResults;
+        lastPipelineRun.status = lastPipelineRun.preReused ? 'pre-reused' : 'complete';
+        if (keepRunDetails) lastPipelineRun.finalResponse = currentResponse;
       }
 
       return currentResponse;
@@ -3084,229 +3060,6 @@
       if (!left) return right;
       if (!right) return left;
       return `${left}\n\n${right}`;
-    }
-
-    async function runAsyncPostPipeline(content, conf, pipeline, type, pipelineRun, snapshot) {
-      try {
-        if (conf.debugLog) console.log('Agents! async post-agent pipeline started');
-        const finalContent = await runPostPipeline(content, conf, pipeline, type, pipelineRun);
-        const applyResult = await applyAsyncPostResultToChat(snapshot, content, finalContent, conf.debugLog);
-
-        if (pipelineRun) {
-          if (applyResult.updated && applyResult.visibleUpdated !== false) {
-            pipelineRun.status = pipelineRun.preReused ? 'pre-reused' : 'complete';
-            pipelineRun.reason = '';
-            pipelineRun.postApplyStatus = 'updated';
-            pipelineRun.postApplyReason = '';
-          } else if (applyResult.updated) {
-            pipelineRun.status = 'post-update-visible-skipped';
-            pipelineRun.reason = applyResult.visibleReason || 'visible chat update skipped';
-            pipelineRun.postApplyStatus = 'saved';
-            pipelineRun.postApplyReason = applyResult.visibleReason || '';
-          } else {
-            pipelineRun.status = 'post-update-skipped';
-            pipelineRun.reason = applyResult.reason;
-            pipelineRun.postApplyStatus = 'skipped';
-            pipelineRun.postApplyReason = applyResult.reason;
-          }
-          if (isRunLogEnabled(conf)) pipelineRun.finalResponse = finalContent;
-          await persistRunLog(pipelineRun, conf.debugLog, conf.runLogEnabled);
-        }
-
-        if (conf.debugLog) {
-          console.log(`Agents! async post-agent pipeline ${applyResult.updated ? 'saved' : 'skipped'}: ${applyResult.reason || applyResult.visibleReason || 'ok'}`);
-          logTextBlock('Agents! debug: final response after async post-agents', finalContent);
-        }
-      } catch (err) {
-        console.log(`Agents! async post-agent pipeline error: ${err.message}`);
-        if (pipelineRun) {
-          pipelineRun.status = 'post-failed';
-          pipelineRun.reason = err.message;
-          pipelineRun.postApplyStatus = 'failed';
-          pipelineRun.postApplyReason = err.message;
-          if (isRunLogEnabled(conf)) pipelineRun.finalResponse = String(content ?? '');
-          await persistRunLog(pipelineRun, conf.debugLog, conf.runLogEnabled);
-        }
-      }
-    }
-
-    async function createAsyncPostSnapshot(debugLog) {
-      let characterIndex = null;
-      let chatIndex = null;
-      try {
-        characterIndex = await Risuai.getCurrentCharacterIndex();
-        chatIndex = await Risuai.getCurrentChatIndex();
-      } catch (err) {
-        return { ok: false, reason: `current chat index unavailable: ${err.message}` };
-      }
-
-      if (!Number.isFinite(Number(characterIndex)) || !Number.isFinite(Number(chatIndex))) {
-        return { ok: false, reason: 'current character/chat index unavailable' };
-      }
-
-      const normalizedCharacterIndex = Math.max(0, parseInt(characterIndex, 10) || 0);
-      const normalizedChatIndex = Math.max(0, parseInt(chatIndex, 10) || 0);
-      try {
-        const chat = await Risuai.getChatFromIndex(normalizedCharacterIndex, normalizedChatIndex);
-        const rawMessages = chat?.message;
-        if (!chat || !Array.isArray(rawMessages)) {
-          return { ok: false, reason: `current chat messages unavailable; keys=${objectKeysPreview(chat)}` };
-        }
-        return {
-          ok: true,
-          characterIndex: normalizedCharacterIndex,
-          chatIndex: normalizedChatIndex,
-          messageCountBeforeResponse: rawMessages.length,
-        };
-      } catch (err) {
-        if (debugLog) console.log(`Agents! async post snapshot failed: ${err.message}`);
-        return { ok: false, reason: `getChatFromIndex failed: ${err.message}` };
-      }
-    }
-
-    async function applyAsyncPostResultToChat(snapshot, originalContent, finalContent, debugLog) {
-      if (!snapshot?.ok) {
-        return { updated: false, reason: snapshot?.reason || 'async post snapshot unavailable' };
-      }
-
-      const expectedIndex = Math.max(0, parseInt(snapshot.messageCountBeforeResponse, 10) || 0);
-      const original = String(originalContent ?? '');
-      const finalText = String(finalContent ?? '');
-
-      for (let attempt = 1; attempt <= ASYNC_POST_APPLY_ATTEMPTS; attempt += 1) {
-        let chat = null;
-        try {
-          chat = await Risuai.getChatFromIndex(snapshot.characterIndex, snapshot.chatIndex);
-        } catch (err) {
-          return { updated: false, reason: `getChatFromIndex failed: ${err.message}` };
-        }
-
-        const rawMessages = chat?.message;
-        if (!chat || !Array.isArray(rawMessages)) {
-          return { updated: false, reason: `current chat messages unavailable; keys=${objectKeysPreview(chat)}` };
-        }
-
-        if (rawMessages.length <= expectedIndex) {
-          if (attempt < ASYNC_POST_APPLY_ATTEMPTS) {
-            if (debugLog) console.log(`Agents! async post apply waiting for saved assistant message (${attempt}/${ASYNC_POST_APPLY_ATTEMPTS})`);
-            await delay(ASYNC_POST_APPLY_DELAY_MS);
-            continue;
-          }
-          return { updated: false, reason: 'assistant message was not saved before timeout' };
-        }
-
-        const targetIndex = findAsyncPostTargetMessageIndex(rawMessages, expectedIndex, original);
-        if (targetIndex < 0) {
-          return { updated: false, reason: 'matching assistant response not found before later user message' };
-        }
-
-        const targetMessage = rawMessages[targetIndex];
-        if (!isAssistantStoredChatMessage(targetMessage)) {
-          return { updated: false, reason: 'matched chat message is not an assistant response' };
-        }
-
-        const currentText = storedChatMessageData(targetMessage);
-        if (!sameResponseText(currentText, original)) {
-          return { updated: false, reason: 'assistant response changed before async post-agent result' };
-        }
-
-        const nextMessages = rawMessages.slice();
-        nextMessages[targetIndex] = {
-          ...targetMessage,
-          data: finalText,
-        };
-        await Risuai.setChatToIndex(snapshot.characterIndex, snapshot.chatIndex, {
-          ...chat,
-          message: nextMessages,
-        });
-        const refreshResult = await requestRisuChatRerender(debugLog);
-        const visibleResult = await applyAsyncPostResultToVisibleChat({
-          ...snapshot,
-          targetIndex,
-        }, finalText, debugLog);
-        return {
-          updated: true,
-          reason: '',
-          visibleUpdated: refreshResult.updated || visibleResult.updated,
-          visibleReason: refreshResult.reason || visibleResult.reason,
-        };
-      }
-
-      return { updated: false, reason: 'assistant message was not saved before timeout' };
-    }
-
-    async function requestRisuChatRerender(debugLog) {
-      try {
-        await Risuai.setDatabaseLite({});
-        return { updated: true, reason: '' };
-      } catch (err) {
-        if (debugLog) console.log(`Agents! async post rerender request failed: ${err.message}`);
-        return { updated: false, reason: err.message };
-      }
-    }
-
-    function findAsyncPostTargetMessageIndex(messages, expectedIndex, original) {
-      if (!Array.isArray(messages)) return -1;
-      const start = Math.max(0, parseInt(expectedIndex, 10) || 0);
-      for (let idx = start; idx < messages.length; idx += 1) {
-        const message = messages[idx];
-        const role = storedChatMessageRole(message);
-        if (role === 'user') return -1;
-        if (role === 'assistant' && sameResponseText(storedChatMessageData(message), original)) {
-          return idx;
-        }
-      }
-      return -1;
-    }
-
-    function sameResponseText(left, right) {
-      const normalize = value => String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
-      return normalize(left) === normalize(right);
-    }
-
-    async function applyAsyncPostResultToVisibleChat(snapshot, finalText, debugLog) {
-      try {
-        const granted = await Risuai.requestPluginPermission('mainDom');
-        if (!granted) return { updated: false, reason: 'mainDom permission denied' };
-
-        const rootDoc = await Risuai.getRootDocument();
-        if (!rootDoc) return { updated: false, reason: 'main root document unavailable' };
-        const index = Math.max(0, parseInt(snapshot.targetIndex ?? snapshot.messageCountBeforeResponse, 10) || 0);
-        const target = await findVisibleChatTextElement(rootDoc, index);
-        if (!target) {
-          if (debugLog) console.log(`Agents! async post visible update skipped: chat text element not found for index ${index}`);
-          return { updated: false, reason: 'visible chat text element not found' };
-        }
-
-        await target.setInnerHTML(textToDisplayHtml(finalText));
-        return { updated: true, reason: '' };
-      } catch (err) {
-        if (debugLog) console.log(`Agents! async post visible update failed: ${err.message}`);
-        return { updated: false, reason: err.message };
-      }
-    }
-
-    async function findVisibleChatTextElement(rootDoc, index) {
-      const selectors = [
-        `.risu-chat[data-chat-index="${index}"] .chattext`,
-        `.risu-chat[data-chat-index="${index}"] .prose`,
-        `.risu-chat[data-chat-index="${index}"] span.text`,
-        `.chat-message-container .risu-chat[data-chat-index="${index}"] .chattext`,
-      ];
-      for (const selector of selectors) {
-        const element = await rootDoc.querySelector(selector);
-        if (element) return element;
-      }
-      return null;
-    }
-
-    function textToDisplayHtml(text) {
-      const normalized = String(text ?? '').replace(/\r\n/g, '\n');
-      const paragraphs = normalized.split(/\n{2,}/);
-      if (paragraphs.length <= 1) return escHtml(normalized).replace(/\n/g, '<br>');
-      return paragraphs
-        .map(part => `<p>${escHtml(part).replace(/\n/g, '<br>')}</p>`)
-        .join('');
     }
 
     // ── 컨텍스트 주입 ─────────────────────────────────────────────────────────
@@ -3972,21 +3725,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
   <details class="card collapsible-card">
     <summary><h2>공통 설정</h2><span class="collapse-state"></span></summary>
-    <div class="collapsible-body">
-      <div class="field">
-        <label for="agents_debug_log">Debug Log</label>
-        <select id="agents_debug_log">
-          <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
-          <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="agents_post_delivery_mode">후처리 표시 방식</label>
-        <select id="agents_post_delivery_mode">
-          <option value="${POST_DELIVERY_BLOCKING}" ${conf.postDeliveryMode !== POST_DELIVERY_ASYNC ? 'selected' : ''}>기존 방식 - 후처리 완료 후 표시</option>
-          <option value="${POST_DELIVERY_ASYNC}" ${conf.postDeliveryMode === POST_DELIVERY_ASYNC ? 'selected' : ''}>즉시 표시 - 후처리 완료 후 메시지 갱신</option>
-        </select>
-      </div>
+    <div class="collapsible-body field">
+      <label for="agents_debug_log">Debug Log</label>
+      <select id="agents_debug_log">
+        <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
+        <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
+      </select>
     </div>
   </details>
 
@@ -4944,7 +4688,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
-        postDeliveryMode: normalizePostDeliveryMode(getInputValue('agents_post_delivery_mode')),
         pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
         pipelinePresetStore: normalizedPipelineStore,
         modelPresets: normalizedPresets,
@@ -4961,7 +4704,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
       await Risuai.setArgument('agents_context_window', String(conf.window));
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
-      await Risuai.setArgument('agents_post_delivery_mode', conf.postDeliveryMode);
       conf.pipelinePresetStore = await savePipelinePresetStore(conf.pipelinePresetStore, conf.pipeline, conf);
       await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
       await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
@@ -5434,10 +5176,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return fallback;
     }
 
-    function delay(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
     function requiredFloat(id, fallback) {
       const parsed = parseFloat(getInputValue(id));
       return Number.isFinite(parsed) ? parsed : fallback;
@@ -5614,38 +5352,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           logTextBlock('Agents! debug: main model response before post-agents', content);
         }
 
-        if (conf.postDeliveryMode === POST_DELIVERY_ASYNC) {
-          const runForPost = lastPipelineRun;
-          const snapshot = await createAsyncPostSnapshot(conf.debugLog);
-          if (!snapshot.ok) {
-            console.log(`Agents! async post-agent pipeline skipped: ${snapshot.reason}`);
-            if (runForPost) {
-              runForPost.status = 'post-skipped';
-              runForPost.reason = snapshot.reason;
-              if (isRunLogEnabled(conf)) runForPost.finalResponse = String(content ?? '');
-              await persistRunLog(runForPost, conf.debugLog, conf.runLogEnabled);
-              if (!isRunLogEnabled(conf)) lastPipelineRun = null;
-            }
-            return content;
-          }
-
-          if (runForPost) {
-            runForPost.status = 'post-pending';
-            runForPost.reason = 'async post-agent pipeline running';
-            runForPost.postDeliveryMode = POST_DELIVERY_ASYNC;
-            runForPost.postApplyStatus = 'pending';
-            runForPost.postApplyReason = '';
-            if (isRunLogEnabled(conf)) runForPost.finalResponse = String(content ?? '');
-            await persistRunLog(runForPost, conf.debugLog, conf.runLogEnabled);
-          }
-
-          runAsyncPostPipeline(content, conf, pipeline, type, runForPost, snapshot)
-            .catch(err => console.log(`Agents! async post-agent pipeline unhandled error: ${err.message}`));
-          if (!isRunLogEnabled(conf)) lastPipelineRun = null;
-          return content;
-        }
-
-        const finalContent = await runPostPipeline(content, conf, pipeline, type, lastPipelineRun);
+        const finalContent = await runPostPipeline(content, conf, pipeline, type);
         await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
         if (!isRunLogEnabled(conf)) lastPipelineRun = null;
         if (conf.debugLog) logTextBlock('Agents! debug: final response after post-agents', finalContent);
