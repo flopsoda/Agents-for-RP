@@ -3093,11 +3093,16 @@
         const applyResult = await applyAsyncPostResultToChat(snapshot, content, finalContent, conf.debugLog);
 
         if (pipelineRun) {
-          if (applyResult.updated) {
+          if (applyResult.updated && applyResult.visibleUpdated !== false) {
             pipelineRun.status = pipelineRun.preReused ? 'pre-reused' : 'complete';
             pipelineRun.reason = '';
             pipelineRun.postApplyStatus = 'updated';
             pipelineRun.postApplyReason = '';
+          } else if (applyResult.updated) {
+            pipelineRun.status = 'post-update-visible-skipped';
+            pipelineRun.reason = applyResult.visibleReason || 'visible chat update skipped';
+            pipelineRun.postApplyStatus = 'saved';
+            pipelineRun.postApplyReason = applyResult.visibleReason || '';
           } else {
             pipelineRun.status = 'post-update-skipped';
             pipelineRun.reason = applyResult.reason;
@@ -3109,7 +3114,7 @@
         }
 
         if (conf.debugLog) {
-          console.log(`Agents! async post-agent pipeline ${applyResult.updated ? 'applied' : 'skipped'}: ${applyResult.reason || 'ok'}`);
+          console.log(`Agents! async post-agent pipeline ${applyResult.updated ? 'saved' : 'skipped'}: ${applyResult.reason || applyResult.visibleReason || 'ok'}`);
           logTextBlock('Agents! debug: final response after async post-agents', finalContent);
         }
       } catch (err) {
@@ -3213,10 +3218,46 @@
           ...chat,
           message: nextMessages,
         });
-        return { updated: true, reason: '' };
+        const visibleResult = await applyAsyncPostResultToVisibleChat(snapshot, finalText, debugLog);
+        return {
+          updated: true,
+          reason: '',
+          visibleUpdated: visibleResult.updated,
+          visibleReason: visibleResult.reason,
+        };
       }
 
       return { updated: false, reason: 'assistant message was not saved before timeout' };
+    }
+
+    async function applyAsyncPostResultToVisibleChat(snapshot, finalText, debugLog) {
+      try {
+        const granted = await Risuai.requestPluginPermission('mainDom');
+        if (!granted) return { updated: false, reason: 'mainDom permission denied' };
+
+        const rootDoc = await Risuai.getRootDocument();
+        const index = Math.max(0, parseInt(snapshot.messageCountBeforeResponse, 10) || 0);
+        const target = await rootDoc.querySelector(`.risu-chat[data-chat-index="${index}"] .text.chat-width.chattext`);
+        if (!target) {
+          if (debugLog) console.log(`Agents! async post visible update skipped: chat text element not found for index ${index}`);
+          return { updated: false, reason: 'visible chat text element not found' };
+        }
+
+        await target.setInnerHTML(textToDisplayHtml(finalText));
+        return { updated: true, reason: '' };
+      } catch (err) {
+        if (debugLog) console.log(`Agents! async post visible update failed: ${err.message}`);
+        return { updated: false, reason: err.message };
+      }
+    }
+
+    function textToDisplayHtml(text) {
+      const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+      const paragraphs = normalized.split(/\n{2,}/);
+      if (paragraphs.length <= 1) return escHtml(normalized).replace(/\n/g, '<br>');
+      return paragraphs
+        .map(part => `<p>${escHtml(part).replace(/\n/g, '<br>')}</p>`)
+        .join('');
     }
 
     // ── 컨텍스트 주입 ─────────────────────────────────────────────────────────
