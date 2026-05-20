@@ -1392,14 +1392,6 @@
       return parsed;
     }
 
-    function parseExtraBodyJsonQuiet(value) {
-      try {
-        return parseExtraBodyJson(value);
-      } catch (_) {
-        return null;
-      }
-    }
-
     function deepMergeJson(base, extra) {
       const result = { ...base };
       Object.entries(extra || {}).forEach(([key, value]) => {
@@ -3808,20 +3800,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           <option value="false" ${!conf.bypassAuxRequests ? 'selected' : ''}>꺼짐 - 모든 요청에 Agents! 실행</option>
         </select>
       </div>
-      <div class="row2">
-        <label class="checkline">
-          <input id="agents_gateway_caching_auto" type="checkbox" ${gatewayCachingAutoEnabled(conf.extraBodyJson) ? 'checked' : ''}>
-          Vercel Gateway automatic caching
-        </label>
-        <label class="checkline">
-          <input id="agents_gateway_zdr" type="checkbox" ${gatewayZdrEnabled(conf.extraBodyJson) ? 'checked' : ''}>
-          Vercel Gateway Zero Data Retention
-        </label>
-      </div>
-      <div class="example-url">체크박스는 아래 JSON의 providerOptions.gateway 값을 갱신합니다.</div>
       <div class="field">
         <label for="agents_extra_body_json">전역 추가 JSON body</label>
-        <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{"providerOptions":{"gateway":{"caching":"auto","zeroDataRetention":true}}}'>${escHtml(conf.extraBodyJson)}</textarea>
+        <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{}'>${escHtml(conf.extraBodyJson)}</textarea>
       </div>
       <div class="example-url">OpenAI-compatible/Vertex chat/completions 요청에만 병합합니다. messages 키는 무시됩니다.</div>
     </div>
@@ -3869,7 +3850,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       setupProviderControls();
       setupCredentialFiles();
       setupEndpointExamples();
-      setupExtraBodyControls();
       renderPipelinePresetControls();
       renderPipeline();
       renderAgentEditor();
@@ -4971,11 +4951,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return document.getElementById(id)?.value?.trim() || '';
     }
 
-    function setElementValue(id, value) {
-      const el = document.getElementById(id);
-      if (el) el.value = value;
-    }
-
     function getProviderValue(id, fallback) {
       const selected = document.getElementById(`${id}_select`)?.value || '';
       if (selected === 'custom') return getInputValue(`${id}_custom`) || fallback || 'custom';
@@ -5127,83 +5102,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         input?.addEventListener('input', () => updateEndpointExample(baseId));
         updateEndpointExample(baseId);
       });
-    }
-
-    function setupExtraBodyControls() {
-      const bodyId = 'agents_extra_body_json';
-      const cachingId = 'agents_gateway_caching_auto';
-      const zdrId = 'agents_gateway_zdr';
-      const body = document.getElementById(bodyId);
-      const updateFromBody = () => syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId);
-      body?.addEventListener('input', updateFromBody);
-      document.getElementById(cachingId)?.addEventListener('change', () => updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId));
-      document.getElementById(zdrId)?.addEventListener('change', () => updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId));
-      updateFromBody();
-    }
-
-    function gatewayCachingAutoEnabled(extraBodyJson) {
-      const parsed = parseExtraBodyJsonQuiet(extraBodyJson);
-      return parsed?.providerOptions?.gateway?.caching === 'auto';
-    }
-
-    function gatewayZdrEnabled(extraBodyJson) {
-      const parsed = parseExtraBodyJsonQuiet(extraBodyJson);
-      return parsed?.providerOptions?.gateway?.zeroDataRetention === true;
-    }
-
-    function syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId) {
-      const parsed = parseExtraBodyJsonQuiet(getInputValue(bodyId));
-      const caching = document.getElementById(cachingId);
-      const zdr = document.getElementById(zdrId);
-      if (!parsed) {
-        if (!getInputValue(bodyId)) {
-          if (caching) caching.checked = false;
-          if (zdr) zdr.checked = false;
-        }
-        return;
-      }
-      if (caching) caching.checked = parsed?.providerOptions?.gateway?.caching === 'auto';
-      if (zdr) zdr.checked = parsed?.providerOptions?.gateway?.zeroDataRetention === true;
-    }
-
-    function updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId) {
-      let body = {};
-      try {
-        body = parseExtraBodyJson(getInputValue(bodyId)) || {};
-      } catch (err) {
-        showMsg(`추가 JSON을 먼저 수정하세요: ${err.message}`, false);
-        syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId);
-        return;
-      }
-
-      const providerOptions = isPlainObject(body.providerOptions) ? { ...body.providerOptions } : {};
-      const gateway = isPlainObject(providerOptions.gateway) ? { ...providerOptions.gateway } : {};
-
-      if (document.getElementById(cachingId)?.checked) {
-        gateway.caching = 'auto';
-      } else {
-        delete gateway.caching;
-      }
-
-      if (document.getElementById(zdrId)?.checked) {
-        gateway.zeroDataRetention = true;
-      } else {
-        delete gateway.zeroDataRetention;
-      }
-
-      if (Object.keys(gateway).length) {
-        providerOptions.gateway = gateway;
-        body.providerOptions = providerOptions;
-      } else {
-        delete providerOptions.gateway;
-        if (Object.keys(providerOptions).length) {
-          body.providerOptions = providerOptions;
-        } else {
-          delete body.providerOptions;
-        }
-      }
-
-      setElementValue(bodyId, Object.keys(body).length ? JSON.stringify(body, null, 2) : '');
     }
 
     function updateEndpointExample(baseId) {
