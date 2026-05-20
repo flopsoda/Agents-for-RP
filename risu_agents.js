@@ -58,7 +58,6 @@
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
-    const NATIVE_PROVIDER_NAME = 'Agents! Native Fetch';
     const AGENT_LLM_TIMEOUT_MS = 120000;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
@@ -184,50 +183,14 @@
 
     // ── LLM 호출 헬퍼 ─────────────────────────────────────────────────────────
 
-    async function callAgent(conf, messages, abortSignal = null) {
+    async function callAgent(conf, messages) {
       if (isAnthropicProvider(conf.provider)) {
-        return callAnthropicAgent(conf, messages, abortSignal);
+        return callAnthropicAgent(conf, messages);
       }
       if (isVertexProvider(conf.provider)) {
-        return callVertexAgent(conf, messages, abortSignal);
+        return callVertexAgent(conf, messages);
       }
-      return callOpenAICompatibleAgent(conf, messages, abortSignal);
-    }
-
-    async function callProviderMainModel(args, abortSignal) {
-      const conf = await getConfig();
-      const modelPreset = findModelPreset(conf.modelPresets, DEFAULT_MODEL_PRESET_ID) || conf.modelPresets[0] || null;
-      const provider = modelPreset?.provider || conf.provider || DEFAULT_AGENT_PROVIDER;
-      const providerConf = {
-        ...conf,
-        provider,
-        baseUrl: normalizeUrl(modelPreset?.baseUrl || conf.baseUrl || DEFAULT_AGENT_BASE_URL),
-        apiKey: getProviderApiKey(conf.providerKeys, provider) || conf.apiKey,
-        model: modelPreset?.model || conf.model || DEFAULT_AGENT_MODEL,
-        temperature: normalizeProviderTemperature(args?.temperature, parseAgentFloat(modelPreset?.temperature, conf.temperature)),
-        maxTokens: normalizeProviderMaxTokens(args?.max_tokens, parseAgentOptionalInt(modelPreset?.maxTokens, conf.maxTokens)),
-        window: Math.max(1, parseInt(modelPreset?.contextWindow || conf.window, 10) || conf.window || 10),
-      };
-
-      if (!providerConf.apiKey) return { success: false, content: 'Agents! Native Fetch provider API key is not set.' };
-
-      try {
-        const content = await callAgent(providerConf, args?.prompt_chat || [], abortSignal);
-        return { success: true, content: String(content || '') };
-      } catch (err) {
-        return { success: false, content: err?.message || String(err) };
-      }
-    }
-
-    function normalizeProviderTemperature(value, fallback) {
-      const parsed = parseFloat(value);
-      if (!Number.isFinite(parsed)) return fallback;
-      return parsed > 2 ? parsed / 100 : parsed;
-    }
-
-    function normalizeProviderMaxTokens(value, fallback) {
-      const parsed = parseInt(value, 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+      return callOpenAICompatibleAgent(conf, messages);
     }
 
     function buildChatCompletionPayload(conf, messages) {
@@ -312,7 +275,7 @@
         id,
         name: String(preset?.name || (idx === 0 ? 'Ollama' : `Model Preset ${idx + 1}`)),
         provider,
-        baseUrl: normalizeUrl(preset?.baseUrl || fallback.baseUrl || defaults?.baseUrl || DEFAULT_AGENT_BASE_URL),
+        baseUrl: normalizeUrl(defaults?.baseUrl || preset?.baseUrl || fallback.baseUrl || DEFAULT_AGENT_BASE_URL),
         model: String(preset?.model || fallback.model || DEFAULT_AGENT_MODEL),
         temperature: preset?.temperature === null || preset?.temperature === undefined || preset?.temperature === ''
           ? String(fallback.temperature ?? 0.7)
@@ -436,20 +399,18 @@
       return list.find(preset => preset.id === id) || null;
     }
 
-    async function callOpenAICompatibleAgent(conf, messages, abortSignal = null) {
+    async function callOpenAICompatibleAgent(conf, messages) {
       const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'OpenAI-compatible chat/completions start', url, payload);
-      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': authHeader,
+          'Authorization': `Bearer ${conf.apiKey}`,
         },
         body: JSON.stringify(payload),
-        signal: abortSignal,
       }, 'OpenAI-compatible chat/completions');
       logAgentFetch(conf, `OpenAI-compatible chat/completions response ${res.status}`, url);
 
@@ -462,7 +423,7 @@
       return data.choices[0].message.content;
     }
 
-    async function callAnthropicAgent(conf, messages, abortSignal = null) {
+    async function callAnthropicAgent(conf, messages) {
       const { system, anthropicMessages } = toAnthropicMessages(messages);
       const payload = {
         model: conf.model,
@@ -474,16 +435,14 @@
 
       const url = `${conf.baseUrl}/messages`;
       logAgentFetch(conf, 'Anthropic messages start', url, payload);
-      const apiKeyHeader = await secretHeaderValue('x-api-key', '', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKeyHeader,
+          'x-api-key': conf.apiKey,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
-        signal: abortSignal,
       }, 'Anthropic messages');
       logAgentFetch(conf, `Anthropic messages response ${res.status}`, url);
 
@@ -496,21 +455,19 @@
       return extractAnthropicText(data);
     }
 
-    async function callVertexAgent(conf, messages, abortSignal = null) {
+    async function callVertexAgent(conf, messages) {
       const accessToken = await getVertexAccessToken(conf.apiKey);
       const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
-      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', accessToken);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': authHeader,
+          'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(payload),
-        signal: abortSignal,
       }, 'Vertex chat/completions');
       logAgentFetch(conf, `Vertex chat/completions response ${res.status}`, url);
 
@@ -4870,11 +4827,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (isAnthropicProvider(conf.provider)) {
         const url = `${conf.baseUrl}/models/${conf.model}`;
         logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Anthropic models start', url);
-        const apiKeyHeader = await secretHeaderValue('x-api-key', '', conf.apiKey);
         const res = await nativeFetchWithTimeout(url, {
           method: 'GET',
           headers: {
-            'x-api-key': apiKeyHeader,
+            'x-api-key': conf.apiKey,
             'anthropic-version': '2023-06-01',
           },
         }, 'Anthropic models test');
@@ -4895,11 +4851,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       const url = `${conf.baseUrl}/models`;
       logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test OpenAI-compatible models start', url);
-      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'GET',
         headers: {
-          'Authorization': authHeader,
+          'Authorization': `Bearer ${conf.apiKey}`,
         },
       }, 'OpenAI-compatible models test');
       logAgentFetch({ ...conf, debugLog: true }, `LLM auth test OpenAI-compatible models response ${res.status}`, url);
@@ -5279,33 +5234,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         .replace(/=+$/g, '');
     }
 
-    async function secretHeaderValue(headerName, prefix, value) {
-      const raw = String(value || '');
-      if (!raw || typeof Risuai.saveSecretHeader !== 'function') return `${prefix || ''}${raw}`;
-
-      const key = `risu_agents_${sanitizeSecretHeaderKey(headerName)}_${hashString(`${prefix || ''}${raw}`)}`;
-      try {
-        await Risuai.saveSecretHeader(key, prefix || '', raw);
-        return { secretHeader: key };
-      } catch (err) {
-        console.warn(`Agents! saveSecretHeader failed for ${headerName}: ${err?.message || err}`);
-        return `${prefix || ''}${raw}`;
-      }
-    }
-
-    function sanitizeSecretHeaderKey(value) {
-      return String(value || 'header').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'header';
-    }
-
-    function hashString(value) {
-      let hash = 0;
-      const text = String(value || '');
-      for (let i = 0; i < text.length; i += 1) {
-        hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-      }
-      return Math.abs(hash).toString(36);
-    }
-
     function isAnthropicProvider(provider) {
       const normalized = normalizeProviderValue(provider);
       return normalized === 'anthropic' || normalized === 'claude';
@@ -5346,24 +5274,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ]);
       } catch (err) {
         if (controller?.signal?.aborted || err?.name === 'AbortError') throw timeoutError();
-        if (isLikelyCorsError(err)) throw makeCorsHelpError(label, url, err);
         throw err;
       } finally {
         if (timeoutId !== null) clearTimeout(timeoutId);
       }
-    }
-
-    function isLikelyCorsError(err) {
-      const message = String(err?.message || err || '').toLowerCase();
-      return message.includes('failed to fetch')
-        || message.includes('cors')
-        || message.includes('access-control-allow-origin')
-        || message.includes('networkerror');
-    }
-
-    function makeCorsHelpError(label, url, err) {
-      const host = formatEndpoint(url);
-      return new Error(`${label} 요청이 브라우저/CORS 단계에서 차단되었습니다 (${host}). RisuAI 웹에서 이 엔드포인트를 쓰는 경우 CORS를 허용하는 프록시 또는 RisuAI 데스크톱/로컬 실행 환경을 사용하세요. 원본 오류: ${err?.message || err}`);
     }
 
     function exampleApiUrl(conf) {
@@ -5488,12 +5402,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (typeof value === 'object') return Object.values(value).some(containsLbProcess);
       return /<\/?\s*lb-process\b/i.test(String(value));
     }
-
-    await Risuai.addProvider(
-      NATIVE_PROVIDER_NAME,
-      callProviderMainModel,
-      { tokenizer: 'gpt-4' },
-    );
 
     // ── beforeRequest / afterRequest 훅 등록 ─────────────────────────────────
 
