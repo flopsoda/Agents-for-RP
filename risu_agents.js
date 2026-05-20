@@ -2,10 +2,10 @@
 //@display-name Agents!
 //@api 3.0
 //@version 1.0.0
-//@arg agents_provider string Analysis agent provider label. e.g. ollama
-//@arg agents_base_url string Analysis agent API base URL. e.g. https://ollama.com/v1, https://api.openai.com/v1, https://api.anthropic.com/v1, or Vertex AI OpenAI-compatible endpoint
+//@arg agents_provider string Analysis agent provider label. e.g. openai
+//@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
 //@arg agents_api_key string Analysis agent API key
-//@arg agents_model string Analysis agent model. e.g. gemini-3-flash-preview:cloud
+//@arg agents_model string Analysis agent model. e.g. gpt-4o-mini
 //@arg agents_temperature string Analysis agent temperature (default: 0.7)
 //@arg agents_max_tokens string Analysis agent max tokens (blank = provider default)
 //@arg agents_context_window int Recent messages per agent (default: 10)
@@ -13,6 +13,9 @@
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
 //@arg agents_bypass_aux_requests string Skip Agents! for auxiliary RisuAI requests. true/false (default: true)
 //@arg agents_extra_body_json string Extra JSON body merged into OpenAI-compatible/Vertex chat/completions requests
+//@arg agents_proxy_url string Optional CORS proxy URL for agent requests
+//@arg agents_proxy_key string Optional CORS proxy access token
+//@arg agents_proxy_direct string Use direct proxy mode with X-Target-URL. true/false (default: false)
 //@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
 //@arg agents_model_presets_json string Model presets JSON
 //@arg agents_provider_keys_json string Provider API keys JSON
@@ -31,20 +34,21 @@
 (async () => {
   try {
     let vertexTokenCache = null;
-    const DEFAULT_AGENT_PROVIDER = 'ollama';
-    const DEFAULT_AGENT_BASE_URL = 'https://ollama.com/v1';
-    const DEFAULT_AGENT_MODEL = 'gemini-3-flash-preview:cloud';
+    const DEFAULT_AGENT_PROVIDER = 'openai';
+    const DEFAULT_AGENT_BASE_URL = 'https://api.openai.com/v1';
+    const DEFAULT_AGENT_MODEL = 'gpt-4o-mini';
     const MASKED_SECRET = '*****';
+    const DEFAULT_OPENAI_PRESET_ID = 'preset-default-openai';
     const DEFAULT_OLLAMA_GEMINI_PRESET_ID = 'preset-default-ollama-gemini-3-flash';
     const DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID = 'preset-default-ollama-deepseek-v4-flash';
-    const DEFAULT_MODEL_PRESET_ID = DEFAULT_OLLAMA_GEMINI_PRESET_ID;
+    const DEFAULT_MODEL_PRESET_ID = DEFAULT_OPENAI_PRESET_ID;
     const UNSET_MODEL_PRESET_ID = '';
     const MODEL_PRESET_UNSET_LABEL = '모델 프리셋 설정하지 않음';
     const PIPELINE_PRESETS_STORAGE_KEY = 'risu_agents_pipeline_presets_v1';
     const PIPELINE_PRESET_STORE_VERSION = 1;
     const AGENT_EXPORT_KIND = 'risu-agents.agent-preset';
     const PIPELINE_EXPORT_KIND = 'risu-agents.pipeline-preset';
-    const DEFAULT_PROVIDER_ORDER = ['ollama', 'openai', 'claude', 'google', 'vertex-ai'];
+    const DEFAULT_PROVIDER_ORDER = ['openai', 'google', 'claude', 'vertex-ai', 'ollama'];
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
@@ -78,6 +82,7 @@
         'deepseek-v3.2:cloud',
       ],
       openai: [
+        'gpt-4o-mini',
         'gpt-5.5',
         'gpt-5.4',
         'gpt-5.4-mini',
@@ -143,6 +148,9 @@
       const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), false);
       const bypassAuxRequests = parseBool(await Risuai.getArgument('agents_bypass_aux_requests'), true);
       const extraBodyJson = String((await Risuai.getArgument('agents_extra_body_json')) || '').trim();
+      const proxyUrl = normalizeProxyUrl(await Risuai.getArgument('agents_proxy_url'));
+      const proxyKey = String((await Risuai.getArgument('agents_proxy_key')) || '').trim();
+      const proxyDirect = parseBool(await Risuai.getArgument('agents_proxy_direct'), false);
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -178,6 +186,9 @@
         runLogEnabled,
         bypassAuxRequests,
         extraBodyJson,
+        proxyUrl,
+        proxyKey,
+        proxyDirect,
       };
     }
 
@@ -273,9 +284,9 @@
       const defaults = providerDefaults(provider);
       return {
         id,
-        name: String(preset?.name || (idx === 0 ? 'Ollama' : `Model Preset ${idx + 1}`)),
+        name: String(preset?.name || (idx === 0 ? defaultPresetName(provider) : `Model Preset ${idx + 1}`)),
         provider,
-        baseUrl: normalizeUrl(defaults?.baseUrl || preset?.baseUrl || fallback.baseUrl || DEFAULT_AGENT_BASE_URL),
+        baseUrl: normalizeUrl(preset?.baseUrl || fallback.baseUrl || defaults?.baseUrl || DEFAULT_AGENT_BASE_URL),
         model: String(preset?.model || fallback.model || DEFAULT_AGENT_MODEL),
         temperature: preset?.temperature === null || preset?.temperature === undefined || preset?.temperature === ''
           ? String(fallback.temperature ?? 0.7)
@@ -293,6 +304,7 @@
 
     function defaultModelPresets(fallbackConfig) {
       const presets = [
+        defaultModelPresetForProvider(DEFAULT_AGENT_PROVIDER, fallbackConfig),
         defaultOllamaModelPreset(
           DEFAULT_OLLAMA_GEMINI_PRESET_ID,
           'Ollama Gemini 3 Flash',
@@ -307,7 +319,7 @@
         ),
       ];
       DEFAULT_PROVIDER_ORDER
-        .filter(provider => provider !== DEFAULT_AGENT_PROVIDER)
+        .filter(provider => provider !== DEFAULT_AGENT_PROVIDER && provider !== 'ollama')
         .forEach((provider, idx) => presets.push(defaultModelPresetForProvider(provider, fallbackConfig, idx)));
       return presets;
     }
@@ -316,8 +328,8 @@
       return {
         id,
         name,
-        provider: DEFAULT_AGENT_PROVIDER,
-        baseUrl: normalizeUrl(DEFAULT_AGENT_BASE_URL),
+        provider: 'ollama',
+        baseUrl: normalizeUrl(providerDefaults('ollama')?.baseUrl || 'https://ollama.com/v1'),
         model,
         temperature: String(fallbackConfig?.temperature ?? 0.7),
         maxTokens: fallbackConfig?.maxTokens === null || fallbackConfig?.maxTokens === undefined ? '' : String(fallbackConfig.maxTokens),
@@ -346,6 +358,7 @@
       const existingProviders = new Set(result.map(preset => normalizeProviderValue(preset.provider)));
 
       [
+        defaultModelPresetForProvider(DEFAULT_AGENT_PROVIDER, fallbackConfig),
         defaultOllamaModelPreset(
           DEFAULT_OLLAMA_GEMINI_PRESET_ID,
           'Ollama Gemini 3 Flash',
@@ -362,6 +375,7 @@
         if (idSet.has(preset.id)) return;
         result.push(preset);
         idSet.add(preset.id);
+        existingProviders.add(normalizeProviderValue(preset.provider));
       });
 
       DEFAULT_PROVIDER_ORDER.filter(provider => provider !== DEFAULT_AGENT_PROVIDER).forEach((provider, idx) => {
@@ -371,6 +385,7 @@
         while (idSet.has(id)) id = `${preset.id}-${idSet.size + 1}`;
         preset.id = id;
         idSet.add(id);
+        existingProviders.add(normalizeProviderValue(preset.provider));
         result.push(preset);
       });
 
@@ -411,7 +426,7 @@
           'Authorization': `Bearer ${conf.apiKey}`,
         },
         body: JSON.stringify(payload),
-      }, 'OpenAI-compatible chat/completions');
+      }, 'OpenAI-compatible chat/completions', conf);
       logAgentFetch(conf, `OpenAI-compatible chat/completions response ${res.status}`, url);
 
       if (!res.ok) {
@@ -443,7 +458,7 @@
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
-      }, 'Anthropic messages');
+      }, 'Anthropic messages', conf);
       logAgentFetch(conf, `Anthropic messages response ${res.status}`, url);
 
       if (!res.ok) {
@@ -468,7 +483,7 @@
           'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(payload),
-      }, 'Vertex chat/completions');
+      }, 'Vertex chat/completions', conf);
       logAgentFetch(conf, `Vertex chat/completions response ${res.status}`, url);
 
       if (!res.ok) {
@@ -1248,7 +1263,7 @@
         row: 0,
         column: 0,
         name: '세계관 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         systemPrompt:
           '당신은 세계관 일관성 에이전트입니다.\n' +
           '지금 벌어지고 있는 사건과 직전 턴의 상황에 밀착하여, 현재 상호작용하고 있는 국소적인 세계관 요소들만 추출해 짧은 메모를 작성하세요.\n' +
@@ -1265,7 +1280,7 @@
         row: 1,
         column: 0,
         name: '플롯 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         systemPrompt:
           '당신은 플롯 관리 에이전트입니다.\n' +
           '현재 서사 흐름, 장면 목적, 이번 장면에서 다룰 복선을 관리하는 메모를 작성하세요.\n' +
@@ -1298,7 +1313,7 @@
         row: 2,
         column: 0,
         name: '캐릭터 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_DEEPSEEK_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         systemPrompt:
           '당신은 등장인물 에이전트입니다.\n' +
           '직전 턴에 벌어진 사건이나 대화에 대한 캐릭터들의 즉각적인 심리와 비언어적 반응을 분석합니다. 사전 설정 요약이나 말투 지침은 제외하고, 오직 현재 이 순간의 내면과 행동에만 집중하세요.\n' +
@@ -1319,7 +1334,7 @@
         row: 3,
         column: 0,
         name: '대사 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         systemPrompt: DEFAULT_DIALOGUE_SYSTEM_PROMPT,
       },
       {
@@ -1327,7 +1342,7 @@
         row: MAIN_ROW_INDEX + 1,
         column: 0,
         name: '최종 다듬기 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         postMode: POST_MODE_POLISH,
         systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
         outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
@@ -1588,7 +1603,7 @@
         row: MAIN_ROW_INDEX + 1,
         column: 0,
         name: '최종 다듬기 에이전트',
-        modelPresetId: DEFAULT_OLLAMA_GEMINI_PRESET_ID,
+        modelPresetId: DEFAULT_MODEL_PRESET_ID,
         postMode: POST_MODE_POLISH,
         systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
         outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
@@ -3805,6 +3820,24 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{}'>${escHtml(conf.extraBodyJson)}</textarea>
       </div>
       <div class="example-url">OpenAI-compatible/Vertex chat/completions 요청에만 병합합니다. messages 키는 무시됩니다.</div>
+      <div class="field">
+        <label for="agents_proxy_url">CORS Proxy URL</label>
+        <input id="agents_proxy_url" type="text" value="${escHtml(conf.proxyUrl || '')}" placeholder="https://proxy.example.com">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="agents_proxy_key">Proxy Access Token</label>
+          <input id="agents_proxy_key" type="password" value="" placeholder="${conf.proxyKey ? '설정됨 - 비워두면 유지' : '선택 사항'}" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="agents_proxy_direct">Proxy Mode</label>
+          <select id="agents_proxy_direct">
+            <option value="false" ${!conf.proxyDirect ? 'selected' : ''}>Rewrite - proxy URL 뒤에 API path 붙이기</option>
+            <option value="true" ${conf.proxyDirect ? 'selected' : ''}>Direct - X-Target-URL 헤더 사용</option>
+          </select>
+        </div>
+      </div>
+      <div class="example-url">RisuAI 웹에서 Ollama Cloud가 CORS로 막힐 때 사용합니다. 비워두면 직접 요청합니다.</div>
     </div>
   </details>
 
@@ -4494,11 +4527,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const endpointField = isCustomProvider
           ? `<div class="field"><label for="preset_baseUrl">Endpoint Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}"></div>`
           : '';
+        const providerWarning = isOllamaProvider(preset.provider)
+          ? '<div class="example-url">RisuAI 웹판에서 Ollama Cloud 직접 호출은 CORS로 막힐 수 있습니다. 공통 설정의 CORS Proxy URL을 사용하세요.</div>'
+          : '';
 
         root.innerHTML = `
           <div class="field"><label for="preset_name">Preset Name</label><input id="preset_name" type="text" value="${escHtml(preset.name)}"></div>
           <div class="field"><label for="preset_provider">Provider</label>${presetProviderSelect('preset_provider', preset.provider)}</div>
           ${endpointField}
+          ${providerWarning}
           <div class="field"><label for="preset_model_select">Model</label>${modelSelect('preset_model', preset.provider, preset.model)}</div>
           <div class="row2">
             <div class="field"><label for="preset_temperature">Temperature</label><input id="preset_temperature" type="number" value="${escHtml(preset.temperature)}"></div>
@@ -4664,6 +4701,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           baseUrl: normalizeUrl(preset.baseUrl || DEFAULT_AGENT_BASE_URL),
           apiKey: providerKeysState[preset.provider] || '',
           model: preset.model || DEFAULT_AGENT_MODEL,
+          proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
+          proxyKey: getInputValue('agents_proxy_key') || initialConf.proxyKey || '',
+          proxyDirect: parseBool(getInputValue('agents_proxy_direct'), false),
         };
 
         if (!conf.apiKey) {
@@ -4774,6 +4814,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
         bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
         extraBodyJson: normalizeExtraBodyJson(getInputValue('agents_extra_body_json')),
+        proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
+        proxyKey: getInputValue('agents_proxy_key') || initialConf.proxyKey || '',
+        proxyDirect: parseBool(getInputValue('agents_proxy_direct'), false),
         pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
         pipelinePresetStore: normalizedPipelineStore,
         modelPresets: normalizedPresets,
@@ -4792,6 +4835,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
       await Risuai.setArgument('agents_bypass_aux_requests', String(conf.bypassAuxRequests));
       await Risuai.setArgument('agents_extra_body_json', conf.extraBodyJson || '');
+      await Risuai.setArgument('agents_proxy_url', conf.proxyUrl || '');
+      await Risuai.setArgument('agents_proxy_key', conf.proxyKey || '');
+      await Risuai.setArgument('agents_proxy_direct', String(conf.proxyDirect));
       conf.pipelinePresetStore = await savePipelinePresetStore(conf.pipelinePresetStore, conf.pipeline, conf);
       await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
       await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
@@ -4803,6 +4849,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         baseUrl: normalizeUrl(getInputValue('agents_base_url') || DEFAULT_AGENT_BASE_URL),
         apiKey: getCredentialValue('agents_api_key') || (await Risuai.getArgument('agents_api_key')) || '',
         model: getInputValue('agents_model') || DEFAULT_AGENT_MODEL,
+        proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
+        proxyKey: getInputValue('agents_proxy_key') || (await Risuai.getArgument('agents_proxy_key')) || '',
+        proxyDirect: parseBool(getInputValue('agents_proxy_direct'), false),
       };
 
       if (!conf.apiKey) {
@@ -4833,7 +4882,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             'x-api-key': conf.apiKey,
             'anthropic-version': '2023-06-01',
           },
-        }, 'Anthropic models test');
+        }, 'Anthropic models test', conf);
         logAgentFetch({ ...conf, debugLog: true }, `LLM auth test Anthropic models response ${res.status}`, url);
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -4856,7 +4905,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         headers: {
           'Authorization': `Bearer ${conf.apiKey}`,
         },
-      }, 'OpenAI-compatible models test');
+      }, 'OpenAI-compatible models test', conf);
       logAgentFetch({ ...conf, debugLog: true }, `LLM auth test OpenAI-compatible models response ${res.status}`, url);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -4997,11 +5046,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     function providerOptions() {
       return [
-        { value: 'ollama', label: 'Ollama' },
         { value: 'openai', label: 'OpenAI' },
+        { value: 'google', label: 'Google' },
         { value: 'claude', label: 'Claude' },
         { value: 'vertex-ai', label: 'Vertex AI' },
-        { value: 'google', label: 'Google' },
+        { value: 'ollama', label: 'Ollama (웹판은 Proxy 권장)' },
         { value: 'custom', label: 'Custom' },
       ];
     }
@@ -5011,11 +5060,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const defaults = {
         openai: {
           baseUrl: 'https://api.openai.com/v1',
-          model: 'gpt-5.4-mini',
+          model: DEFAULT_AGENT_MODEL,
         },
         ollama: {
-          baseUrl: DEFAULT_AGENT_BASE_URL,
-          model: DEFAULT_AGENT_MODEL,
+          baseUrl: 'https://ollama.com/v1',
+          model: 'gemini-3-flash-preview:cloud',
         },
         claude: {
           baseUrl: 'https://api.anthropic.com/v1',
@@ -5244,6 +5293,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return normalized === 'vertex-ai' || normalized === 'vertex';
     }
 
+    function isOllamaProvider(provider) {
+      return normalizeProviderValue(provider) === 'ollama';
+    }
+
     function normalizeProviderValue(value) {
       return String(value || '').trim().toLowerCase().replace(/_/g, '-').replace(/\s+/g, '-');
     }
@@ -5252,7 +5305,42 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return String(url || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '');
     }
 
-    async function nativeFetchWithTimeout(url, options = {}, label = 'request') {
+    function normalizeProxyUrl(url) {
+      let value = String(url || '').trim().replace(/\/+$/, '');
+      if (value && !/^https?:\/\//i.test(value)) value = `https://${value}`;
+      return value;
+    }
+
+    function resolveProxyRequest(url, options = {}, conf = null) {
+      const proxyUrl = normalizeProxyUrl(conf?.proxyUrl);
+      if (!proxyUrl) return { url, options };
+
+      const headers = { ...(options.headers || {}) };
+      const proxyKey = String(conf?.proxyKey || '').trim();
+      if (proxyKey) headers['X-Proxy-Token'] = proxyKey;
+
+      if (conf?.proxyDirect) {
+        headers['X-Target-URL'] = url;
+        return {
+          url: proxyUrl,
+          options: { ...options, headers },
+        };
+      }
+
+      try {
+        const target = new URL(url);
+        const proxy = new URL(proxyUrl);
+        const proxiedUrl = `${proxy.origin}${proxy.pathname.replace(/\/+$/, '')}${target.pathname}${target.search}`;
+        return {
+          url: proxiedUrl,
+          options: { ...options, headers },
+        };
+      } catch (_) {
+        return { url, options };
+      }
+    }
+
+    async function nativeFetchWithTimeout(url, options = {}, label = 'request', conf = null) {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
       let timeoutId = null;
       const timeoutError = () => new Error(`${label} timed out after ${Math.round(AGENT_LLM_TIMEOUT_MS / 1000)}s`);
@@ -5260,14 +5348,16 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       try {
         if (controller) {
           timeoutId = setTimeout(() => controller.abort(), AGENT_LLM_TIMEOUT_MS);
-          return await Risuai.nativeFetch(url, {
+          const request = resolveProxyRequest(url, {
             ...options,
             signal: controller.signal,
-          });
+          }, conf);
+          return await Risuai.nativeFetch(request.url, request.options);
         }
 
+        const request = resolveProxyRequest(url, options, conf);
         return await Promise.race([
-          Risuai.nativeFetch(url, options),
+          Risuai.nativeFetch(request.url, request.options),
           new Promise((_, reject) => {
             timeoutId = setTimeout(() => reject(timeoutError()), AGENT_LLM_TIMEOUT_MS);
           }),
@@ -5329,6 +5419,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         model: conf.model,
         url,
       };
+      if (conf.proxyUrl) {
+        info.proxyUrl = conf.proxyUrl;
+        info.proxyMode = conf.proxyDirect ? 'direct' : 'rewrite';
+      }
       if (payload) {
         info.messageCount = Array.isArray(payload.messages) ? payload.messages.length : undefined;
         info.temperature = payload.temperature;
