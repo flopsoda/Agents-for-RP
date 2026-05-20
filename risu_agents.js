@@ -3195,22 +3195,23 @@
           return { updated: false, reason: 'assistant message was not saved before timeout' };
         }
 
-        if (rawMessages.length > expectedIndex + 1) {
-          return { updated: false, reason: 'chat advanced before async post-agent result' };
+        const targetIndex = findAsyncPostTargetMessageIndex(rawMessages, expectedIndex, original);
+        if (targetIndex < 0) {
+          return { updated: false, reason: 'matching assistant response not found before later user message' };
         }
 
-        const targetMessage = rawMessages[expectedIndex];
+        const targetMessage = rawMessages[targetIndex];
         if (!isAssistantStoredChatMessage(targetMessage)) {
-          return { updated: false, reason: 'latest new chat message is not an assistant response' };
+          return { updated: false, reason: 'matched chat message is not an assistant response' };
         }
 
         const currentText = storedChatMessageData(targetMessage);
-        if (currentText !== original) {
+        if (!sameResponseText(currentText, original)) {
           return { updated: false, reason: 'assistant response changed before async post-agent result' };
         }
 
         const nextMessages = rawMessages.slice();
-        nextMessages[expectedIndex] = {
+        nextMessages[targetIndex] = {
           ...targetMessage,
           data: finalText,
         };
@@ -3218,16 +3219,49 @@
           ...chat,
           message: nextMessages,
         });
-        const visibleResult = await applyAsyncPostResultToVisibleChat(snapshot, finalText, debugLog);
+        const refreshResult = await requestRisuChatRerender(debugLog);
+        const visibleResult = await applyAsyncPostResultToVisibleChat({
+          ...snapshot,
+          targetIndex,
+        }, finalText, debugLog);
         return {
           updated: true,
           reason: '',
-          visibleUpdated: visibleResult.updated,
-          visibleReason: visibleResult.reason,
+          visibleUpdated: refreshResult.updated || visibleResult.updated,
+          visibleReason: refreshResult.reason || visibleResult.reason,
         };
       }
 
       return { updated: false, reason: 'assistant message was not saved before timeout' };
+    }
+
+    async function requestRisuChatRerender(debugLog) {
+      try {
+        await Risuai.setDatabaseLite({});
+        return { updated: true, reason: '' };
+      } catch (err) {
+        if (debugLog) console.log(`Agents! async post rerender request failed: ${err.message}`);
+        return { updated: false, reason: err.message };
+      }
+    }
+
+    function findAsyncPostTargetMessageIndex(messages, expectedIndex, original) {
+      if (!Array.isArray(messages)) return -1;
+      const start = Math.max(0, parseInt(expectedIndex, 10) || 0);
+      for (let idx = start; idx < messages.length; idx += 1) {
+        const message = messages[idx];
+        const role = storedChatMessageRole(message);
+        if (role === 'user') return -1;
+        if (role === 'assistant' && sameResponseText(storedChatMessageData(message), original)) {
+          return idx;
+        }
+      }
+      return -1;
+    }
+
+    function sameResponseText(left, right) {
+      const normalize = value => String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
+      return normalize(left) === normalize(right);
     }
 
     async function applyAsyncPostResultToVisibleChat(snapshot, finalText, debugLog) {
@@ -3236,8 +3270,9 @@
         if (!granted) return { updated: false, reason: 'mainDom permission denied' };
 
         const rootDoc = await Risuai.getRootDocument();
-        const index = Math.max(0, parseInt(snapshot.messageCountBeforeResponse, 10) || 0);
-        const target = await rootDoc.querySelector(`.risu-chat[data-chat-index="${index}"] .text.chat-width.chattext`);
+        if (!rootDoc) return { updated: false, reason: 'main root document unavailable' };
+        const index = Math.max(0, parseInt(snapshot.targetIndex ?? snapshot.messageCountBeforeResponse, 10) || 0);
+        const target = await findVisibleChatTextElement(rootDoc, index);
         if (!target) {
           if (debugLog) console.log(`Agents! async post visible update skipped: chat text element not found for index ${index}`);
           return { updated: false, reason: 'visible chat text element not found' };
@@ -3249,6 +3284,20 @@
         if (debugLog) console.log(`Agents! async post visible update failed: ${err.message}`);
         return { updated: false, reason: err.message };
       }
+    }
+
+    async function findVisibleChatTextElement(rootDoc, index) {
+      const selectors = [
+        `.risu-chat[data-chat-index="${index}"] .chattext`,
+        `.risu-chat[data-chat-index="${index}"] .prose`,
+        `.risu-chat[data-chat-index="${index}"] span.text`,
+        `.chat-message-container .risu-chat[data-chat-index="${index}"] .chattext`,
+      ];
+      for (const selector of selectors) {
+        const element = await rootDoc.querySelector(selector);
+        if (element) return element;
+      }
+      return null;
     }
 
     function textToDisplayHtml(text) {
