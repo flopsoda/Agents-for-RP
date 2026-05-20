@@ -275,7 +275,7 @@
         id,
         name: String(preset?.name || (idx === 0 ? 'Ollama' : `Model Preset ${idx + 1}`)),
         provider,
-        baseUrl: normalizeUrl(defaults?.baseUrl || preset?.baseUrl || fallback.baseUrl || DEFAULT_AGENT_BASE_URL),
+        baseUrl: normalizeUrl(preset?.baseUrl || fallback.baseUrl || defaults?.baseUrl || DEFAULT_AGENT_BASE_URL),
         model: String(preset?.model || fallback.model || DEFAULT_AGENT_MODEL),
         temperature: preset?.temperature === null || preset?.temperature === undefined || preset?.temperature === ''
           ? String(fallback.temperature ?? 0.7)
@@ -404,11 +404,12 @@
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'OpenAI-compatible chat/completions start', url, payload);
+      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${conf.apiKey}`,
+          'Authorization': authHeader,
         },
         body: JSON.stringify(payload),
       }, 'OpenAI-compatible chat/completions');
@@ -435,11 +436,12 @@
 
       const url = `${conf.baseUrl}/messages`;
       logAgentFetch(conf, 'Anthropic messages start', url, payload);
+      const apiKeyHeader = await secretHeaderValue('x-api-key', '', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': conf.apiKey,
+          'x-api-key': apiKeyHeader,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
@@ -461,11 +463,12 @@
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
+      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', accessToken);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
+          'Authorization': authHeader,
         },
         body: JSON.stringify(payload),
       }, 'Vertex chat/completions');
@@ -4827,10 +4830,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (isAnthropicProvider(conf.provider)) {
         const url = `${conf.baseUrl}/models/${conf.model}`;
         logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Anthropic models start', url);
+        const apiKeyHeader = await secretHeaderValue('x-api-key', '', conf.apiKey);
         const res = await nativeFetchWithTimeout(url, {
           method: 'GET',
           headers: {
-            'x-api-key': conf.apiKey,
+            'x-api-key': apiKeyHeader,
             'anthropic-version': '2023-06-01',
           },
         }, 'Anthropic models test');
@@ -4851,10 +4855,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       const url = `${conf.baseUrl}/models`;
       logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test OpenAI-compatible models start', url);
+      const authHeader = await secretHeaderValue('Authorization', 'Bearer ', conf.apiKey);
       const res = await nativeFetchWithTimeout(url, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${conf.apiKey}`,
+          'Authorization': authHeader,
         },
       }, 'OpenAI-compatible models test');
       logAgentFetch({ ...conf, debugLog: true }, `LLM auth test OpenAI-compatible models response ${res.status}`, url);
@@ -5234,6 +5239,33 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         .replace(/=+$/g, '');
     }
 
+    async function secretHeaderValue(headerName, prefix, value) {
+      const raw = String(value || '');
+      if (!raw || typeof Risuai.saveSecretHeader !== 'function') return `${prefix || ''}${raw}`;
+
+      const key = `risu_agents_${sanitizeSecretHeaderKey(headerName)}_${hashString(`${prefix || ''}${raw}`)}`;
+      try {
+        await Risuai.saveSecretHeader(key, prefix || '', raw);
+        return { secretHeader: key };
+      } catch (err) {
+        console.warn(`Agents! saveSecretHeader failed for ${headerName}: ${err?.message || err}`);
+        return `${prefix || ''}${raw}`;
+      }
+    }
+
+    function sanitizeSecretHeaderKey(value) {
+      return String(value || 'header').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'header';
+    }
+
+    function hashString(value) {
+      let hash = 0;
+      const text = String(value || '');
+      for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+      }
+      return Math.abs(hash).toString(36);
+    }
+
     function isAnthropicProvider(provider) {
       const normalized = normalizeProviderValue(provider);
       return normalized === 'anthropic' || normalized === 'claude';
@@ -5274,10 +5306,24 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ]);
       } catch (err) {
         if (controller?.signal?.aborted || err?.name === 'AbortError') throw timeoutError();
+        if (isLikelyCorsError(err)) throw makeCorsHelpError(label, url, err);
         throw err;
       } finally {
         if (timeoutId !== null) clearTimeout(timeoutId);
       }
+    }
+
+    function isLikelyCorsError(err) {
+      const message = String(err?.message || err || '').toLowerCase();
+      return message.includes('failed to fetch')
+        || message.includes('cors')
+        || message.includes('access-control-allow-origin')
+        || message.includes('networkerror');
+    }
+
+    function makeCorsHelpError(label, url, err) {
+      const host = formatEndpoint(url);
+      return new Error(`${label} 요청이 브라우저/CORS 단계에서 차단되었습니다 (${host}). RisuAI 웹에서 이 엔드포인트를 쓰는 경우 CORS를 허용하는 프록시 또는 RisuAI 데스크톱/로컬 실행 환경을 사용하세요. 원본 오류: ${err?.message || err}`);
     }
 
     function exampleApiUrl(conf) {
