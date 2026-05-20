@@ -3356,6 +3356,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .detail-block pre,.prompt-preview-block pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#f5f5f5}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:40;display:flex;align-items:center;justify-content:center;padding:18px}
 .prompt-modal,.memory-modal{width:min(920px,100%);max-height:88vh;overflow:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54)}
+.confirm-modal{width:min(440px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54);padding:16px}
+.confirm-modal h2{font-size:1rem;margin-bottom:8px}.confirm-modal p{font-size:.86rem;color:#d6d6d6;overflow-wrap:anywhere}.confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
 .prompt-modal{padding:16px}.prompt-modal-head,.memory-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .prompt-modal-head{margin-bottom:12px}.memory-modal-head{border-bottom:1px solid var(--line);padding:14px 16px}.memory-modal-head h2{font-size:1rem;margin:0 0 4px}.memory-modal-body{padding:14px 16px 18px}
 .prompt-preview-meta,.memory-snapshot-meta{font-size:.76rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
@@ -4008,14 +4010,19 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         renderPipelinePresetControls();
       }
 
-      function deletePipelinePreset() {
+      async function deletePipelinePreset() {
         if ((pipelinePresetStoreState.presets || []).length <= 1) {
           showMsg('최소 1개의 파이프라인 프리셋은 필요합니다.', false);
           return;
         }
         const active = getActivePipelinePreset(pipelinePresetStoreState);
         if (!active) return;
-        if (!window.confirm(`"${active.name}" 파이프라인을 정말 삭제할까요?`)) return;
+        const confirmed = await showConfirmDialog({
+          title: '파이프라인 삭제',
+          message: `"${active.name}" 파이프라인을 정말 삭제할까요?`,
+          confirmText: '삭제',
+        });
+        if (!confirmed) return;
         pipelinePresetStoreState.presets = pipelinePresetStoreState.presets.filter(preset => preset.id !== active.id);
         const next = pipelinePresetStoreState.presets[0];
         activePipelinePresetId = next.id;
@@ -4455,8 +4462,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         renderAgentEditor();
       }
 
-      function deleteAgent(agent) {
-        if (!window.confirm(`"${agent.name}" 에이전트를 정말 삭제할까요?`)) return;
+      async function deleteAgent(agent) {
+        const confirmed = await showConfirmDialog({
+          title: '에이전트 삭제',
+          message: `"${agent.name}" 에이전트를 정말 삭제할까요?`,
+          confirmText: '삭제',
+        });
+        if (!confirmed) return;
         const row = pipelineState.rows[agent.row];
         row.agents = row.agents.filter(item => item.id !== agent.id);
         selectedAgentId = findFirstAgentId(pipelineState);
@@ -4908,6 +4920,51 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       setTimeout(() => {
         if (el.textContent === text) el.className = 'msg';
       }, 4000);
+    }
+
+    function showConfirmDialog(options = {}) {
+      const title = options.title || '확인';
+      const message = options.message || '계속할까요?';
+      const confirmText = options.confirmText || '확인';
+      const cancelText = options.cancelText || '취소';
+      const modalId = 'agents-confirm-modal';
+
+      document.getElementById(modalId)?.remove();
+
+      return new Promise((resolve) => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="${modalId}" class="modal-backdrop">
+            <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="${modalId}-title">
+              <h2 id="${modalId}-title">${escHtml(title)}</h2>
+              <p>${escHtml(message)}</p>
+              <div class="confirm-actions">
+                <button id="${modalId}-cancel" class="ghost" type="button">${escHtml(cancelText)}</button>
+                <button id="${modalId}-confirm" class="danger" type="button">${escHtml(confirmText)}</button>
+              </div>
+            </div>
+          </div>`);
+
+        const modal = document.getElementById(modalId);
+        const confirm = document.getElementById(`${modalId}-confirm`);
+        const cancel = document.getElementById(`${modalId}-cancel`);
+
+        const close = (value) => {
+          document.removeEventListener('keydown', onKeydown);
+          modal?.remove();
+          resolve(value);
+        };
+        const onKeydown = (event) => {
+          if (event.key === 'Escape') close(false);
+        };
+
+        modal?.addEventListener('click', (event) => {
+          if (event.target?.id === modalId) close(false);
+        });
+        confirm?.addEventListener('click', () => close(true));
+        cancel?.addEventListener('click', () => close(false));
+        document.addEventListener('keydown', onKeydown);
+        confirm?.focus();
+      });
     }
 
     function getInputValue(id) {
