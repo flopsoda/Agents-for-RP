@@ -11,6 +11,8 @@
 //@arg agents_context_window int Recent messages per agent (default: 10)
 //@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: false)
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
+//@arg agents_bypass_aux_requests string Skip Agents! for auxiliary RisuAI requests. true/false (default: true)
+//@arg agents_extra_body_json string Extra JSON body merged into OpenAI-compatible/Vertex chat/completions requests
 //@arg agents_pipeline_json string Dynamic Agents! pipeline JSON
 //@arg agents_model_presets_json string Model presets JSON
 //@arg agents_provider_keys_json string Provider API keys JSON
@@ -139,6 +141,8 @@
       const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
       const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), false);
       const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), false);
+      const bypassAuxRequests = parseBool(await Risuai.getArgument('agents_bypass_aux_requests'), true);
+      const extraBodyJson = String((await Risuai.getArgument('agents_extra_body_json')) || '').trim();
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -172,6 +176,8 @@
         window,
         debugLog,
         runLogEnabled,
+        bypassAuxRequests,
+        extraBodyJson,
       };
     }
 
@@ -185,6 +191,28 @@
         return callVertexAgent(conf, messages);
       }
       return callOpenAICompatibleAgent(conf, messages);
+    }
+
+    function buildChatCompletionPayload(conf, messages) {
+      const payload = {
+        model: conf.model,
+        messages,
+        temperature: conf.temperature,
+      };
+      if (conf.maxTokens !== null) payload.max_tokens = conf.maxTokens;
+
+      const extraBody = parseExtraBodyJsonRuntime(conf.extraBodyJson, conf.debugLog);
+      if (!extraBody) return payload;
+      return deepMergeJson(payload, extraBody);
+    }
+
+    function parseExtraBodyJsonRuntime(raw, debugLog) {
+      try {
+        return parseExtraBodyJson(raw);
+      } catch (err) {
+        if (debugLog) console.log(`Agents! extra JSON body ignored: ${err.message}`);
+        return null;
+      }
     }
 
     function parseProviderKeys(raw, configuredProvider, configuredApiKey, debugLog) {
@@ -372,12 +400,7 @@
     }
 
     async function callOpenAICompatibleAgent(conf, messages) {
-      const payload = {
-        model: conf.model,
-        messages,
-        temperature: conf.temperature,
-      };
-      if (conf.maxTokens !== null) payload.max_tokens = conf.maxTokens;
+      const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'OpenAI-compatible chat/completions start', url, payload);
@@ -434,12 +457,7 @@
 
     async function callVertexAgent(conf, messages) {
       const accessToken = await getVertexAccessToken(conf.apiKey);
-      const payload = {
-        model: conf.model,
-        messages,
-        temperature: conf.temperature,
-      };
-      if (conf.maxTokens !== null) payload.max_tokens = conf.maxTokens;
+      const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${conf.baseUrl}/chat/completions`;
       logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
@@ -1349,6 +1367,54 @@
         }
       }
       return raw;
+    }
+
+    function normalizeExtraBodyJson(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      return JSON.stringify(parseExtraBodyJson(raw), null, 2);
+    }
+
+    function parseExtraBodyJson(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        throw new Error(`추가 JSON body 파싱 실패: ${err.message}`);
+      }
+
+      if (!isPlainObject(parsed)) {
+        throw new Error('추가 JSON body는 JSON object여야 합니다.');
+      }
+      return parsed;
+    }
+
+    function parseExtraBodyJsonQuiet(value) {
+      try {
+        return parseExtraBodyJson(value);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function deepMergeJson(base, extra) {
+      const result = { ...base };
+      Object.entries(extra || {}).forEach(([key, value]) => {
+        if (key === 'messages') return;
+        if (isPlainObject(value) && isPlainObject(result[key])) {
+          result[key] = deepMergeJson(result[key], value);
+        } else {
+          result[key] = value;
+        }
+      });
+      return result;
+    }
+
+    function isPlainObject(value) {
+      return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
     }
 
     function createPipelinePreset(name, pipeline) {
@@ -3725,12 +3791,37 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
   <details class="card collapsible-card">
     <summary><h2>공통 설정</h2><span class="collapse-state"></span></summary>
-    <div class="collapsible-body field">
-      <label for="agents_debug_log">Debug Log</label>
-      <select id="agents_debug_log">
-        <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
-        <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
-      </select>
+    <div class="collapsible-body">
+      <div class="field">
+        <label for="agents_debug_log">Debug Log</label>
+        <select id="agents_debug_log">
+          <option value="true" ${conf.debugLog ? 'selected' : ''}>켜짐 - 프롬프트 흐름을 콘솔에 출력</option>
+          <option value="false" ${!conf.debugLog ? 'selected' : ''}>꺼짐</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="agents_bypass_aux_requests">보조 요청 우회</label>
+        <select id="agents_bypass_aux_requests">
+          <option value="true" ${conf.bypassAuxRequests ? 'selected' : ''}>켜짐 - memory/translate/otherAx 등 보조 요청은 통과</option>
+          <option value="false" ${!conf.bypassAuxRequests ? 'selected' : ''}>꺼짐 - 모든 요청에 Agents! 실행</option>
+        </select>
+      </div>
+      <div class="row2">
+        <label class="checkline">
+          <input id="agents_gateway_caching_auto" type="checkbox" ${gatewayCachingAutoEnabled(conf.extraBodyJson) ? 'checked' : ''}>
+          Vercel Gateway automatic caching
+        </label>
+        <label class="checkline">
+          <input id="agents_gateway_zdr" type="checkbox" ${gatewayZdrEnabled(conf.extraBodyJson) ? 'checked' : ''}>
+          Vercel Gateway Zero Data Retention
+        </label>
+      </div>
+      <div class="example-url">체크박스는 아래 JSON의 providerOptions.gateway 값을 갱신합니다.</div>
+      <div class="field">
+        <label for="agents_extra_body_json">전역 추가 JSON body</label>
+        <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{"providerOptions":{"gateway":{"caching":"auto","zeroDataRetention":true}}}'>${escHtml(conf.extraBodyJson)}</textarea>
+      </div>
+      <div class="example-url">OpenAI-compatible/Vertex chat/completions 요청에만 병합합니다. messages 키는 무시됩니다.</div>
     </div>
   </details>
 
@@ -3776,6 +3867,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       setupProviderControls();
       setupCredentialFiles();
       setupEndpointExamples();
+      setupExtraBodyControls();
       renderPipelinePresetControls();
       renderPipeline();
       renderAgentEditor();
@@ -4688,6 +4780,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
+        bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
+        extraBodyJson: normalizeExtraBodyJson(getInputValue('agents_extra_body_json')),
         pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
         pipelinePresetStore: normalizedPipelineStore,
         modelPresets: normalizedPresets,
@@ -4704,6 +4798,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
       await Risuai.setArgument('agents_context_window', String(conf.window));
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
+      await Risuai.setArgument('agents_bypass_aux_requests', String(conf.bypassAuxRequests));
+      await Risuai.setArgument('agents_extra_body_json', conf.extraBodyJson || '');
       conf.pipelinePresetStore = await savePipelinePresetStore(conf.pipelinePresetStore, conf.pipeline, conf);
       await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
       await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
@@ -4816,6 +4912,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     function getInputValue(id) {
       return document.getElementById(id)?.value?.trim() || '';
+    }
+
+    function setElementValue(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.value = value;
     }
 
     function getProviderValue(id, fallback) {
@@ -4969,6 +5070,83 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         input?.addEventListener('input', () => updateEndpointExample(baseId));
         updateEndpointExample(baseId);
       });
+    }
+
+    function setupExtraBodyControls() {
+      const bodyId = 'agents_extra_body_json';
+      const cachingId = 'agents_gateway_caching_auto';
+      const zdrId = 'agents_gateway_zdr';
+      const body = document.getElementById(bodyId);
+      const updateFromBody = () => syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId);
+      body?.addEventListener('input', updateFromBody);
+      document.getElementById(cachingId)?.addEventListener('change', () => updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId));
+      document.getElementById(zdrId)?.addEventListener('change', () => updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId));
+      updateFromBody();
+    }
+
+    function gatewayCachingAutoEnabled(extraBodyJson) {
+      const parsed = parseExtraBodyJsonQuiet(extraBodyJson);
+      return parsed?.providerOptions?.gateway?.caching === 'auto';
+    }
+
+    function gatewayZdrEnabled(extraBodyJson) {
+      const parsed = parseExtraBodyJsonQuiet(extraBodyJson);
+      return parsed?.providerOptions?.gateway?.zeroDataRetention === true;
+    }
+
+    function syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId) {
+      const parsed = parseExtraBodyJsonQuiet(getInputValue(bodyId));
+      const caching = document.getElementById(cachingId);
+      const zdr = document.getElementById(zdrId);
+      if (!parsed) {
+        if (!getInputValue(bodyId)) {
+          if (caching) caching.checked = false;
+          if (zdr) zdr.checked = false;
+        }
+        return;
+      }
+      if (caching) caching.checked = parsed?.providerOptions?.gateway?.caching === 'auto';
+      if (zdr) zdr.checked = parsed?.providerOptions?.gateway?.zeroDataRetention === true;
+    }
+
+    function updateGatewayBodyFromCheckboxes(bodyId, cachingId, zdrId) {
+      let body = {};
+      try {
+        body = parseExtraBodyJson(getInputValue(bodyId)) || {};
+      } catch (err) {
+        showMsg(`추가 JSON을 먼저 수정하세요: ${err.message}`, false);
+        syncGatewayCheckboxesFromBody(bodyId, cachingId, zdrId);
+        return;
+      }
+
+      const providerOptions = isPlainObject(body.providerOptions) ? { ...body.providerOptions } : {};
+      const gateway = isPlainObject(providerOptions.gateway) ? { ...providerOptions.gateway } : {};
+
+      if (document.getElementById(cachingId)?.checked) {
+        gateway.caching = 'auto';
+      } else {
+        delete gateway.caching;
+      }
+
+      if (document.getElementById(zdrId)?.checked) {
+        gateway.zeroDataRetention = true;
+      } else {
+        delete gateway.zeroDataRetention;
+      }
+
+      if (Object.keys(gateway).length) {
+        providerOptions.gateway = gateway;
+        body.providerOptions = providerOptions;
+      } else {
+        delete providerOptions.gateway;
+        if (Object.keys(providerOptions).length) {
+          body.providerOptions = providerOptions;
+        } else {
+          delete body.providerOptions;
+        }
+      }
+
+      setElementValue(bodyId, Object.keys(body).length ? JSON.stringify(body, null, 2) : '');
     }
 
     function updateEndpointExample(baseId) {
@@ -5251,11 +5429,37 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (console.groupEnd) console.groupEnd();
     }
 
+    function getAuxRequestBypassReason(messages, type, conf) {
+      if (!conf?.bypassAuxRequests) return '';
+      const requestType = String(type || '').trim().toLowerCase();
+      const auxTypes = new Set(['memory', 'emotion', 'translate', 'otherax', 'submodel', 'sub-model']);
+      if (auxTypes.has(requestType)) return `auxiliary request (${requestType})`;
+      if (Array.isArray(messages) && messages.some(msg => containsLbProcess(msg?.content))) {
+        return '<lb-process> helper request';
+      }
+      return '';
+    }
+
+    function containsLbProcess(value) {
+      if (value === null || value === undefined) return false;
+      if (typeof value === 'string') return /<\/?\s*lb-process\b/i.test(value);
+      if (Array.isArray(value)) return value.some(containsLbProcess);
+      if (typeof value === 'object') return Object.values(value).some(containsLbProcess);
+      return /<\/?\s*lb-process\b/i.test(String(value));
+    }
+
     // ── beforeRequest / afterRequest 훅 등록 ─────────────────────────────────
 
     await Risuai.addRisuReplacer('beforeRequest', async (messages, type) => {
       try {
         const conf = await getConfig();
+        const bypassReason = getAuxRequestBypassReason(messages, type, conf);
+        if (bypassReason) {
+          lastPipelineRun = null;
+          if (conf.debugLog) console.log(`Agents! bypassed: ${bypassReason}`);
+          return messages;
+        }
+
         const pipeline = await getPipelineConfig(conf);
         const runScope = await getAgentMemoryScope(conf.debugLog);
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
@@ -5319,6 +5523,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     await Risuai.addRisuReplacer('afterRequest', async (content, type) => {
       try {
         const conf = await getConfig();
+        const bypassReason = getAuxRequestBypassReason(null, type, conf);
+        if (bypassReason) {
+          if (conf.debugLog) console.log(`Agents! afterRequest bypassed: ${bypassReason}`);
+          return content;
+        }
+        if (!lastPipelineRun) return content;
+
         const pipeline = await getPipelineConfig(conf);
         const hasPostAgents = pipeline.rows
           .slice(MAIN_ROW_INDEX + 1)
