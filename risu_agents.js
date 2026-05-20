@@ -58,6 +58,7 @@
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
+    const NATIVE_PROVIDER_NAME = 'Agents! Native Fetch';
     const AGENT_LLM_TIMEOUT_MS = 120000;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
@@ -183,14 +184,50 @@
 
     // ── LLM 호출 헬퍼 ─────────────────────────────────────────────────────────
 
-    async function callAgent(conf, messages) {
+    async function callAgent(conf, messages, abortSignal = null) {
       if (isAnthropicProvider(conf.provider)) {
-        return callAnthropicAgent(conf, messages);
+        return callAnthropicAgent(conf, messages, abortSignal);
       }
       if (isVertexProvider(conf.provider)) {
-        return callVertexAgent(conf, messages);
+        return callVertexAgent(conf, messages, abortSignal);
       }
-      return callOpenAICompatibleAgent(conf, messages);
+      return callOpenAICompatibleAgent(conf, messages, abortSignal);
+    }
+
+    async function callProviderMainModel(args, abortSignal) {
+      const conf = await getConfig();
+      const modelPreset = findModelPreset(conf.modelPresets, DEFAULT_MODEL_PRESET_ID) || conf.modelPresets[0] || null;
+      const provider = modelPreset?.provider || conf.provider || DEFAULT_AGENT_PROVIDER;
+      const providerConf = {
+        ...conf,
+        provider,
+        baseUrl: normalizeUrl(modelPreset?.baseUrl || conf.baseUrl || DEFAULT_AGENT_BASE_URL),
+        apiKey: getProviderApiKey(conf.providerKeys, provider) || conf.apiKey,
+        model: modelPreset?.model || conf.model || DEFAULT_AGENT_MODEL,
+        temperature: normalizeProviderTemperature(args?.temperature, parseAgentFloat(modelPreset?.temperature, conf.temperature)),
+        maxTokens: normalizeProviderMaxTokens(args?.max_tokens, parseAgentOptionalInt(modelPreset?.maxTokens, conf.maxTokens)),
+        window: Math.max(1, parseInt(modelPreset?.contextWindow || conf.window, 10) || conf.window || 10),
+      };
+
+      if (!providerConf.apiKey) return { success: false, content: 'Agents! Native Fetch provider API key is not set.' };
+
+      try {
+        const content = await callAgent(providerConf, args?.prompt_chat || [], abortSignal);
+        return { success: true, content: String(content || '') };
+      } catch (err) {
+        return { success: false, content: err?.message || String(err) };
+      }
+    }
+
+    function normalizeProviderTemperature(value, fallback) {
+      const parsed = parseFloat(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return parsed > 2 ? parsed / 100 : parsed;
+    }
+
+    function normalizeProviderMaxTokens(value, fallback) {
+      const parsed = parseInt(value, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     }
 
     function buildChatCompletionPayload(conf, messages) {
@@ -399,7 +436,7 @@
       return list.find(preset => preset.id === id) || null;
     }
 
-    async function callOpenAICompatibleAgent(conf, messages) {
+    async function callOpenAICompatibleAgent(conf, messages, abortSignal = null) {
       const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${conf.baseUrl}/chat/completions`;
@@ -412,6 +449,7 @@
           'Authorization': authHeader,
         },
         body: JSON.stringify(payload),
+        signal: abortSignal,
       }, 'OpenAI-compatible chat/completions');
       logAgentFetch(conf, `OpenAI-compatible chat/completions response ${res.status}`, url);
 
@@ -424,7 +462,7 @@
       return data.choices[0].message.content;
     }
 
-    async function callAnthropicAgent(conf, messages) {
+    async function callAnthropicAgent(conf, messages, abortSignal = null) {
       const { system, anthropicMessages } = toAnthropicMessages(messages);
       const payload = {
         model: conf.model,
@@ -445,6 +483,7 @@
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify(payload),
+        signal: abortSignal,
       }, 'Anthropic messages');
       logAgentFetch(conf, `Anthropic messages response ${res.status}`, url);
 
@@ -457,7 +496,7 @@
       return extractAnthropicText(data);
     }
 
-    async function callVertexAgent(conf, messages) {
+    async function callVertexAgent(conf, messages, abortSignal = null) {
       const accessToken = await getVertexAccessToken(conf.apiKey);
       const payload = buildChatCompletionPayload(conf, messages);
 
@@ -471,6 +510,7 @@
           'Authorization': authHeader,
         },
         body: JSON.stringify(payload),
+        signal: abortSignal,
       }, 'Vertex chat/completions');
       logAgentFetch(conf, `Vertex chat/completions response ${res.status}`, url);
 
@@ -5448,6 +5488,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (typeof value === 'object') return Object.values(value).some(containsLbProcess);
       return /<\/?\s*lb-process\b/i.test(String(value));
     }
+
+    await Risuai.addProvider(
+      NATIVE_PROVIDER_NAME,
+      callProviderMainModel,
+      { tokenizer: 'gpt-4' },
+    );
 
     // ── beforeRequest / afterRequest 훅 등록 ─────────────────────────────────
 
