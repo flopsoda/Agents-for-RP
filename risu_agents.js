@@ -1,9 +1,9 @@
 //@name risu_agents
 //@display-name Agents!
 //@api 3.0
-//@version 1.0.0
+//@version 1.1.0
 //@arg agents_provider string Analysis agent provider label. e.g. openai
-//@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
+//@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
 //@arg agents_api_key string Analysis agent API key
 //@arg agents_model string Analysis agent model. e.g. gpt-4o-mini
 //@arg agents_temperature string Analysis agent temperature (default: 0.7)
@@ -12,7 +12,7 @@
 //@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: false)
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
 //@arg agents_bypass_aux_requests string Skip Agents! for auxiliary RisuAI requests. true/false (default: true)
-//@arg agents_extra_body_json string Extra JSON body merged into OpenAI-compatible/Vertex chat/completions requests
+//@arg agents_extra_body_json string Extra JSON body merged into agent API requests
 //@arg agents_proxy_url string Optional CORS proxy URL for agent requests
 //@arg agents_proxy_key string Optional CORS proxy access token
 //@arg agents_proxy_direct string Use direct proxy mode with X-Target-URL. true/false (default: false)
@@ -48,7 +48,7 @@
     const PIPELINE_PRESET_STORE_VERSION = 1;
     const AGENT_EXPORT_KIND = 'risu-agents.agent-preset';
     const PIPELINE_EXPORT_KIND = 'risu-agents.pipeline-preset';
-    const DEFAULT_PROVIDER_ORDER = ['openai', 'google', 'claude', 'vertex-ai', 'ollama'];
+    const DEFAULT_PROVIDER_ORDER = ['openai', 'google', 'claude', 'vertex-ai', 'deepseek', 'ollama'];
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
@@ -57,7 +57,7 @@
     const RUN_LOG_BODY_VERSION = 1;
     const RUN_LOG_BODY_INLINE_LIMIT = 1000;
     const RUN_LOG_BODY_PREVIEW_CHARS = 700;
-    const PRE_REUSE_VERSION = 2;
+    const PRE_REUSE_VERSION = 3;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
@@ -97,6 +97,10 @@
         'gpt-4.1',
         'gpt-4.1-mini',
         'gpt-4.1-nano',
+      ],
+      deepseek: [
+        'deepseek-v4-flash',
+        'deepseek-v4-pro',
       ],
       claude: [
         'claude-opus-4-7',
@@ -212,18 +216,58 @@
       };
       if (conf.maxTokens !== null) payload.max_tokens = conf.maxTokens;
 
-      const extraBody = parseExtraBodyJsonRuntime(conf.extraBodyJson, conf.debugLog);
-      if (!extraBody) return payload;
-      return deepMergeJson(payload, extraBody);
+      return applyRequestBodyOverrides(payload, conf);
     }
 
-    function parseExtraBodyJsonRuntime(raw, debugLog) {
+    function applyRequestBodyOverrides(payload, conf) {
+      let result = payload;
+      const globalExtraBody = parseExtraBodyJsonRuntime(conf.extraBodyJson, conf.debugLog, 'global extra JSON body');
+      if (globalExtraBody) result = deepMergeJson(result, globalExtraBody);
+      const presetExtraBody = parseExtraBodyJsonRuntime(conf.presetExtraBodyJson, conf.debugLog, 'preset extra JSON body');
+      if (presetExtraBody) result = deepMergeJson(result, presetExtraBody);
+      return applyReasoningQuickSetting(result, conf);
+    }
+
+    function parseExtraBodyJsonRuntime(raw, debugLog, label = 'extra JSON body') {
       try {
         return parseExtraBodyJson(raw);
       } catch (err) {
-        if (debugLog) console.log(`Agents! extra JSON body ignored: ${err.message}`);
+        if (debugLog) console.log(`Agents! ${label} ignored: ${err.message}`);
         return null;
       }
+    }
+
+    function applyReasoningQuickSetting(payload, conf) {
+      const setting = normalizeReasoningQuickSetting(conf?.provider, conf?.reasoningQuickSetting);
+      if (setting === 'default') return payload;
+
+      const result = { ...payload };
+      if (isDeepSeekProvider(conf?.provider)) {
+        result.thinking = {
+          ...(isPlainObject(result.thinking) ? result.thinking : {}),
+          type: setting === 'disabled' ? 'disabled' : 'enabled',
+        };
+        if (setting === 'disabled') {
+          delete result.reasoning_effort;
+          delete result.reasoning;
+        } else {
+          result.reasoning_effort = setting;
+        }
+        return result;
+      }
+
+      if (isAnthropicProvider(conf?.provider)) {
+        result.output_config = {
+          ...(isPlainObject(result.output_config) ? result.output_config : {}),
+          effort: setting,
+        };
+        return result;
+      }
+
+      if (isOpenAIProvider(conf?.provider) || isGoogleProvider(conf?.provider) || isVertexProvider(conf?.provider) || isOllamaProvider(conf?.provider)) {
+        result.reasoning_effort = setting;
+      }
+      return result;
     }
 
     function parseProviderKeys(raw, configuredProvider, configuredApiKey, debugLog) {
@@ -256,7 +300,7 @@
         try {
           const parsed = JSON.parse(String(raw));
           const source = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.presets) ? parsed.presets : [];
-          const presets = normalizeModelPresets(source, fallbackConfig);
+          const presets = normalizeModelPresets(source, fallbackConfig, { debugLog });
           if (presets.length > 0) return presets;
         } catch (err) {
           if (debugLog) console.log(`Agents! model preset JSON parse failed: ${err.message}`);
@@ -265,15 +309,15 @@
       return defaultModelPresets(fallbackConfig);
     }
 
-    function normalizeModelPresets(source, fallbackConfig) {
+    function normalizeModelPresets(source, fallbackConfig, options = {}) {
       const used = new Set();
       const presets = (Array.isArray(source) ? source : [])
-        .map((preset, idx) => normalizeModelPreset(preset, fallbackConfig, idx, used))
+        .map((preset, idx) => normalizeModelPreset(preset, fallbackConfig, idx, used, options))
         .filter(Boolean);
       return ensureDefaultProviderPresets(presets, fallbackConfig, used);
     }
 
-    function normalizeModelPreset(preset, fallbackConfig, idx, used) {
+    function normalizeModelPreset(preset, fallbackConfig, idx, used, options = {}) {
       const fallback = fallbackConfig || {};
       const baseId = String(preset?.id || (idx === 0 ? DEFAULT_MODEL_PRESET_ID : makeAgentId('preset')));
       let id = baseId;
@@ -295,6 +339,8 @@
         contextWindow: preset?.contextWindow === null || preset?.contextWindow === undefined || preset?.contextWindow === ''
           ? String(fallback.window || 10)
           : String(preset.contextWindow),
+        reasoningQuickSetting: normalizeReasoningQuickSetting(provider, preset?.reasoningQuickSetting),
+        extraBodyJson: normalizePresetExtraBodyJson(preset?.extraBodyJson, options),
       };
     }
 
@@ -334,6 +380,8 @@
         temperature: String(fallbackConfig?.temperature ?? 0.7),
         maxTokens: fallbackConfig?.maxTokens === null || fallbackConfig?.maxTokens === undefined ? '' : String(fallbackConfig.maxTokens),
         contextWindow: String(fallbackConfig?.window || 10),
+        reasoningQuickSetting: 'default',
+        extraBodyJson: '',
       };
     }
 
@@ -349,6 +397,8 @@
         temperature: String(fallbackConfig?.temperature ?? 0.7),
         maxTokens: fallbackConfig?.maxTokens === null || fallbackConfig?.maxTokens === undefined ? '' : String(fallbackConfig.maxTokens),
         contextWindow: String(fallbackConfig?.window || 10),
+        reasoningQuickSetting: 'default',
+        extraBodyJson: '',
       };
     }
 
@@ -399,6 +449,7 @@
         claude: 'Claude',
         google: 'Google Gemini',
         'vertex-ai': 'Vertex Gemini',
+        deepseek: 'DeepSeek',
       };
       return names[normalizeProviderValue(provider)] || 'Model Preset';
     }
@@ -440,13 +491,14 @@
 
     async function callAnthropicAgent(conf, messages) {
       const { system, anthropicMessages } = toAnthropicMessages(messages);
-      const payload = {
+      let payload = {
         model: conf.model,
         messages: anthropicMessages,
         temperature: conf.temperature,
         max_tokens: conf.maxTokens || 1024,
       };
       if (system) payload.system = system;
+      payload = applyRequestBodyOverrides(payload, conf);
 
       const url = `${conf.baseUrl}/messages`;
       logAgentFetch(conf, 'Anthropic messages start', url, payload);
@@ -1390,6 +1442,18 @@
       return JSON.stringify(parseExtraBodyJson(raw), null, 2);
     }
 
+    function normalizePresetExtraBodyJson(value, options = {}) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try {
+        return normalizeExtraBodyJson(raw);
+      } catch (err) {
+        if (options.strictExtraBody) throw err;
+        if (options.debugLog) console.log(`Agents! preset extra JSON body ignored: ${err.message}`);
+        return '';
+      }
+    }
+
     function parseExtraBodyJson(value) {
       const raw = String(value || '').trim();
       if (!raw) return null;
@@ -1684,6 +1748,8 @@
         temperature,
         maxTokens,
         window,
+        reasoningQuickSetting: normalizeReasoningQuickSetting(provider, preset.reasoningQuickSetting),
+        presetExtraBodyJson: preset.extraBodyJson || '',
       };
     }
 
@@ -2538,7 +2604,9 @@
             .update(preset?.baseUrl || '')
             .update(String(preset?.temperature ?? ''))
             .update(String(preset?.maxTokens ?? ''))
-            .update(String(preset?.contextWindow ?? ''));
+            .update(String(preset?.contextWindow ?? ''))
+            .update(String(preset?.reasoningQuickSetting ?? ''))
+            .update(String(preset?.extraBodyJson ?? ''));
         });
       }
       return hasher.digest();
@@ -3819,7 +3887,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         <label for="agents_extra_body_json">전역 추가 JSON body</label>
         <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{}'>${escHtml(conf.extraBodyJson)}</textarea>
       </div>
-      <div class="example-url">OpenAI-compatible/Vertex chat/completions 요청에만 병합합니다. messages 키는 무시됩니다.</div>
+      <div class="example-url">각 에이전트 API 요청에 병합합니다. messages 키는 무시됩니다.</div>
       <div class="field">
         <label for="agents_proxy_url">CORS Proxy URL</label>
         <input id="agents_proxy_url" type="text" value="${escHtml(conf.proxyUrl || '')}" placeholder="https://proxy.example.com">
@@ -4497,7 +4565,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const selected = preset.id === selectedPresetId ? ' selected' : '';
           return `<div class="preset-item${selected}" data-preset-id="${escHtml(preset.id)}">
             <div class="preset-title">${escHtml(preset.name)}</div>
-            <div class="preset-meta">${escHtml(preset.provider)} · ${escHtml(preset.model)}</div>
+            <div class="preset-meta">${escHtml(preset.provider)} · ${escHtml(preset.model)}${escHtml(reasoningQuickSettingMeta(preset))}</div>
           </div>`;
         }).join('');
         root.querySelectorAll('[data-preset-id]').forEach((item) => {
@@ -4542,6 +4610,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <div class="field"><label for="preset_maxTokens">Max Tokens</label><input id="preset_maxTokens" type="number" value="${escHtml(preset.maxTokens)}" placeholder="비우면 provider 기본값"></div>
           </div>
           <div class="field"><label for="preset_contextWindow">Context Window</label><input id="preset_contextWindow" type="number" min="1" value="${escHtml(preset.contextWindow)}"></div>
+          <div class="field"><label for="preset_reasoningQuickSetting">Reasoning Quick Setting</label>${reasoningQuickSettingSelect('preset_reasoningQuickSetting', preset.provider, preset.reasoningQuickSetting)}</div>
+          <div class="example-url">${escHtml(reasoningQuickSettingHelp(preset.provider))}</div>
+          <div class="field"><label for="preset_extraBodyJson">프리셋 추가 JSON body</label><textarea id="preset_extraBodyJson" spellcheck="false" placeholder='{}'>${escHtml(preset.extraBodyJson || '')}</textarea></div>
+          <div class="example-url">전역 추가 JSON 이후에 병합합니다. provider-native thinking JSON을 직접 쓸 때는 Quick Setting을 Default로 두세요.</div>
           <div class="mini-actions">
             <button id="preset-test-btn">Preset test</button>
             <button id="preset-delete-btn" class="danger">프리셋 삭제</button>
@@ -4560,12 +4632,23 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           });
         });
 
+        document.getElementById('preset_reasoningQuickSetting')?.addEventListener('change', (event) => {
+          preset.reasoningQuickSetting = normalizeReasoningQuickSetting(preset.provider, event.target.value);
+          renderPresetList();
+        });
+
+        document.getElementById('preset_extraBodyJson')?.addEventListener('input', (event) => {
+          preset.extraBodyJson = event.target.value;
+          renderPresetList();
+        });
+
         document.getElementById('preset_provider')?.addEventListener('change', (event) => {
           const previousModel = preset.model;
           preset.provider = event.target.value;
           const defaults = providerDefaults(preset.provider);
           if (defaults) preset.baseUrl = defaults.baseUrl;
           if (defaults && shouldReplaceModel(previousModel)) preset.model = defaults.model;
+          preset.reasoningQuickSetting = normalizeReasoningQuickSetting(preset.provider, preset.reasoningQuickSetting);
           renderPipeline();
           renderPresetList();
           renderPresetEditor();
@@ -4663,6 +4746,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           temperature: '0.7',
           maxTokens: '',
           contextWindow: '10',
+          reasoningQuickSetting: 'default',
+          extraBodyJson: '',
         }, initialConf, modelPresetsState.length, new Set(modelPresetsState.map(item => item.id)));
         modelPresetsState.push(preset);
         selectedPresetId = preset.id;
@@ -4742,6 +4827,58 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       </select>`;
     }
 
+    function reasoningQuickSettingValuesForProvider(provider) {
+      const normalized = normalizeProviderValue(provider);
+      if (isOpenAIProvider(normalized)) return ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+      if (isGoogleProvider(normalized)) return ['default', 'none', 'minimal', 'low', 'medium', 'high'];
+      if (isVertexProvider(normalized)) return ['default', 'low', 'medium', 'high'];
+      if (isDeepSeekProvider(normalized)) return ['default', 'disabled', 'high', 'max'];
+      if (isAnthropicProvider(normalized)) return ['default', 'low', 'medium', 'high', 'xhigh', 'max'];
+      if (isOllamaProvider(normalized)) return ['default', 'none', 'low', 'medium', 'high'];
+      return ['default'];
+    }
+
+    function normalizeReasoningQuickSetting(provider, value) {
+      const raw = String(value || 'default').trim().toLowerCase();
+      const selected = raw || 'default';
+      const values = reasoningQuickSettingValuesForProvider(provider);
+      return values.includes(selected) ? selected : 'default';
+    }
+
+    function reasoningQuickSettingSelect(id, provider, value) {
+      const selected = normalizeReasoningQuickSetting(provider, value);
+      const labels = {
+        default: 'Default',
+        none: 'None',
+        minimal: 'Minimal',
+        low: 'Low',
+        medium: 'Medium',
+        high: 'High',
+        xhigh: 'XHigh',
+        max: 'Max',
+        disabled: 'Disabled',
+      };
+      return `<select id="${id}">
+        ${reasoningQuickSettingValuesForProvider(provider).map(option =>
+        `<option value="${escHtml(option)}" ${option === selected ? 'selected' : ''}>${escHtml(labels[option] || option)}</option>`
+      ).join('')}
+      </select>`;
+    }
+
+    function reasoningQuickSettingHelp(provider) {
+      if (isDeepSeekProvider(provider)) return 'DeepSeek는 disabled/high/max를 thinking 및 reasoning_effort로 변환합니다.';
+      if (isAnthropicProvider(provider)) return 'Claude는 output_config.effort로 변환합니다. adaptive thinking 등 고급값은 JSON에 직접 넣으세요.';
+      if (isGoogleProvider(provider) || isVertexProvider(provider)) return 'Gemini OpenAI-compatible endpoint 기준 reasoning_effort로 변환합니다.';
+      if (isOllamaProvider(provider)) return 'Ollama OpenAI-compatible endpoint 기준 reasoning_effort로 변환합니다.';
+      if (isOpenAIProvider(provider)) return 'OpenAI Chat Completions reasoning_effort로 변환합니다.';
+      return 'Custom provider는 추가 JSON body를 직접 사용하세요.';
+    }
+
+    function reasoningQuickSettingMeta(preset) {
+      const setting = normalizeReasoningQuickSetting(preset?.provider, preset?.reasoningQuickSetting);
+      return setting === 'default' ? '' : ` · reasoning ${setting}`;
+    }
+
     function modelOptionsForProvider(provider) {
       return MODEL_SEED_CATALOG[normalizeProviderValue(provider)] || [];
     }
@@ -4789,7 +4926,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     }
 
     function collectLiteConfig(initialConf, pipeline, modelPresets, providerKeys, pipelinePresetStore) {
-      const normalizedPresets = normalizeModelPresets(modelPresets, initialConf);
+      const normalizedPresets = normalizeModelPresets(modelPresets, initialConf, { strictExtraBody: true });
       const firstPreset = normalizedPresets[0] || defaultModelPreset(initialConf);
       const normalizedPipelineStore = normalizePipelinePresetStore(pipelinePresetStore, pipeline, normalizedPresets);
       const active = getActivePipelinePreset(normalizedPipelineStore);
@@ -5050,6 +5187,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         { value: 'google', label: 'Google' },
         { value: 'claude', label: 'Claude' },
         { value: 'vertex-ai', label: 'Vertex AI' },
+        { value: 'deepseek', label: 'DeepSeek' },
         { value: 'ollama', label: 'Ollama (웹판은 Proxy 권장)' },
         { value: 'custom', label: 'Custom' },
       ];
@@ -5074,6 +5212,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           baseUrl: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi',
           model: 'google/gemini-2.5-flash',
         },
+        deepseek: {
+          baseUrl: 'https://api.deepseek.com',
+          model: 'deepseek-v4-flash',
+        },
         google: {
           baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
           model: 'gemini-2.5-flash',
@@ -5088,6 +5230,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ollama: providerDefaults('ollama'),
         claude: providerDefaults('claude'),
         vertex: providerDefaults('vertex-ai'),
+        deepseek: providerDefaults('deepseek'),
         google: providerDefaults('google'),
       }).map(item => item.baseUrl);
     }
@@ -5283,6 +5426,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         .replace(/=+$/g, '');
     }
 
+    function isOpenAIProvider(provider) {
+      return normalizeProviderValue(provider) === 'openai';
+    }
+
+    function isGoogleProvider(provider) {
+      return normalizeProviderValue(provider) === 'google';
+    }
+
     function isAnthropicProvider(provider) {
       const normalized = normalizeProviderValue(provider);
       return normalized === 'anthropic' || normalized === 'claude';
@@ -5295,6 +5446,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     function isOllamaProvider(provider) {
       return normalizeProviderValue(provider) === 'ollama';
+    }
+
+    function isDeepSeekProvider(provider) {
+      return normalizeProviderValue(provider) === 'deepseek';
     }
 
     function normalizeProviderValue(value) {
@@ -5427,6 +5582,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         info.messageCount = Array.isArray(payload.messages) ? payload.messages.length : undefined;
         info.temperature = payload.temperature;
         info.max_tokens = payload.max_tokens;
+        info.reasoningQuickSetting = normalizeReasoningQuickSetting(conf.provider, conf.reasoningQuickSetting);
+        if (payload.reasoning_effort !== undefined) info.reasoning_effort = payload.reasoning_effort;
+        if (isPlainObject(payload.reasoning) && payload.reasoning.effort !== undefined) info.reasoning_effort_nested = payload.reasoning.effort;
+        if (isPlainObject(payload.thinking) && payload.thinking.type !== undefined) info.thinking = payload.thinking.type;
+        if (isPlainObject(payload.output_config) && payload.output_config.effort !== undefined) info.output_config_effort = payload.output_config.effort;
       }
       console.log(`Agents! fetch: ${label}`, info);
     }
