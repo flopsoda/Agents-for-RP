@@ -4611,7 +4611,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           </div>
           <div class="field"><label for="preset_contextWindow">Context Window</label><input id="preset_contextWindow" type="number" min="1" value="${escHtml(preset.contextWindow)}"></div>
           <div class="field"><label for="preset_reasoningQuickSetting">Reasoning Quick Setting</label>${reasoningQuickSettingSelect('preset_reasoningQuickSetting', preset.provider, preset.reasoningQuickSetting)}</div>
-          <div class="example-url">${escHtml(reasoningQuickSettingHelp(preset.provider))}</div>
           <div class="field"><label for="preset_extraBodyJson">프리셋 추가 JSON body</label><textarea id="preset_extraBodyJson" spellcheck="false" placeholder='{}'>${escHtml(preset.extraBodyJson || '')}</textarea></div>
           <div class="example-url">전역 추가 JSON 이후에 병합합니다. provider-native thinking JSON을 직접 쓸 때는 Quick Setting을 Default로 두세요.</div>
           <div class="mini-actions">
@@ -4863,15 +4862,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         `<option value="${escHtml(option)}" ${option === selected ? 'selected' : ''}>${escHtml(labels[option] || option)}</option>`
       ).join('')}
       </select>`;
-    }
-
-    function reasoningQuickSettingHelp(provider) {
-      if (isDeepSeekProvider(provider)) return 'DeepSeek는 disabled/high/max를 thinking 및 reasoning_effort로 변환합니다.';
-      if (isAnthropicProvider(provider)) return 'Claude는 output_config.effort로 변환합니다. adaptive thinking 등 고급값은 JSON에 직접 넣으세요.';
-      if (isGoogleProvider(provider) || isVertexProvider(provider)) return 'Gemini OpenAI-compatible endpoint 기준 reasoning_effort로 변환합니다.';
-      if (isOllamaProvider(provider)) return 'Ollama OpenAI-compatible endpoint 기준 reasoning_effort로 변환합니다.';
-      if (isOpenAIProvider(provider)) return 'OpenAI Chat Completions reasoning_effort로 변환합니다.';
-      return 'Custom provider는 추가 JSON body를 직접 사용하세요.';
     }
 
     function reasoningQuickSettingMeta(preset) {
