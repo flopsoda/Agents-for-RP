@@ -1013,6 +1013,73 @@
       return normalizeForMatch(left) === normalizeForMatch(right);
     }
 
+    async function buildBasicPlaceholderContext(chat, debugLog) {
+      const context = {
+        characterName: '',
+        userName: 'User',
+        userSource: 'fallback:User',
+        error: '',
+      };
+
+      try {
+        const character = await Risuai.getCharacter();
+        context.characterName = firstNonEmpty(character?.nickname, character?.name);
+      } catch (err) {
+        context.error = `getCharacter: ${err.message}`;
+        if (debugLog) console.log(`Agents! placeholders: ${context.error}`);
+      }
+
+      let db = null;
+      try {
+        db = await Risuai.getDatabase(['personas', 'selectedPersona']);
+      } catch (err) {
+        context.error = [context.error, `getDatabase: ${err.message}`].filter(Boolean).join('; ');
+        if (debugLog) console.log(`Agents! placeholders: getDatabase: ${err.message}`);
+      }
+
+      const bindedPersona = String(chat?.bindedPersona || '').trim();
+      const personas = Array.isArray(db?.personas) ? db.personas : [];
+      if (bindedPersona && personas.length) {
+        const persona = personas.find(item => item?.id === bindedPersona || item?.name === bindedPersona);
+        const personaName = String(persona?.name || '').trim();
+        if (personaName) {
+          context.userName = personaName;
+          context.userSource = 'chat.bindedPersona';
+        } else {
+          context.userSource = 'bindedPersona-not-found:User';
+        }
+      } else if (bindedPersona) {
+        context.userSource = db ? 'bindedPersona-not-found:User' : 'db-unavailable:User';
+      } else {
+        context.userSource = 'fallback:User';
+      }
+
+      return context;
+    }
+
+    function applyBasicRisuPlaceholdersToMessages(messages, placeholderContext) {
+      let applied = false;
+      const converted = (Array.isArray(messages) ? messages : []).map(message => {
+        const content = applyBasicRisuPlaceholders(message.content, placeholderContext);
+        if (content !== message.content) applied = true;
+        return content === message.content ? message : { ...message, content };
+      });
+      return { messages: converted, applied };
+    }
+
+    function applyBasicRisuPlaceholders(text, placeholderContext) {
+      let result = String(text || '');
+      const characterName = String(placeholderContext?.characterName || '');
+      if (characterName) {
+        result = result
+          .replace(/\{\{char\}\}/g, characterName)
+          .replace(/\{\{Char\}\}/g, characterName);
+      }
+      return result
+        .replace(/\{\{user\}\}/g, placeholderContext?.userName || 'User')
+        .replace(/\{\{User\}\}/g, placeholderContext?.userName || 'User');
+    }
+
     async function loadActualChatContext(_requestMessages, debugLog) {
       const fallback = {
         available: false,
@@ -1027,6 +1094,8 @@
         firstMessageSource: '',
         firstMessageIndex: null,
         firstMessageError: '',
+        placeholderReplacementApplied: false,
+        placeholderUserSource: '',
       };
 
       const errors = [];
@@ -1072,6 +1141,7 @@
       }
 
       const firstMessageInfo = await resolveCurrentFirstMessage(chat, debugLog);
+      const placeholderContext = await buildBasicPlaceholderContext(chat, debugLog);
 
       const rawMessages = chat?.message;
       if (!Array.isArray(rawMessages)) {
@@ -1083,6 +1153,7 @@
           firstMessageSource: firstMessageInfo.source,
           firstMessageIndex: firstMessageInfo.index,
           firstMessageError: firstMessageInfo.error,
+          placeholderUserSource: placeholderContext.userSource,
         };
       }
 
@@ -1104,11 +1175,16 @@
           firstMessageSource: firstMessageInfo.source,
           firstMessageIndex: firstMessageInfo.index,
           firstMessageError: firstMessageInfo.error,
+          placeholderUserSource: placeholderContext.userSource,
         };
       }
 
       const trimmedToCurrentUser = lastUserIndex < contextMessages.length - 1;
-      const messages = contextMessages.slice(0, lastUserIndex + 1);
+      const placeholderResult = applyBasicRisuPlaceholdersToMessages(
+        contextMessages.slice(0, lastUserIndex + 1),
+        placeholderContext,
+      );
+      const messages = placeholderResult.messages;
       const sourceParts = ['chat.message'];
       if (firstMessageContext.included) sourceParts.push('first-message');
       if (trimmedToCurrentUser) sourceParts.push('trimmed-to-last-user');
@@ -1128,6 +1204,8 @@
         firstMessageSource: firstMessageInfo.source,
         firstMessageIndex: firstMessageInfo.index,
         firstMessageError: firstMessageInfo.error,
+        placeholderReplacementApplied: placeholderResult.applied,
+        placeholderUserSource: placeholderContext.userSource,
       };
     }
 
@@ -2701,6 +2779,8 @@
         firstMessageSource: chatContext?.firstMessageSource || '',
         firstMessageIndex: chatContext?.firstMessageIndex ?? null,
         firstMessageError: chatContext?.firstMessageError || '',
+        placeholderReplacementApplied: Boolean(chatContext?.placeholderReplacementApplied),
+        placeholderUserSource: chatContext?.placeholderUserSource || '',
       };
     }
 
@@ -3685,6 +3765,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${runLog?.chatContextSource ? `<span class="badge ${runLog.chatContextAvailable ? 'ok' : 'err'}">대화 컨텍스트: ${escHtml(runLog.chatContextSource)} · ${escHtml(runLog.chatContextMessageCount ?? 0)}개</span>` : ''}
         ${runLog?.firstMessageSource ? `<span class="badge ${runLog.firstMessageIncluded ? 'ok' : 'neutral'}">첫 메시지: ${runLog.firstMessageIncluded ? '포함' : '미포함'} · ${escHtml(runLog.firstMessageSource)}</span>` : ''}
         ${runLog?.firstMessageError ? `<span class="badge neutral">첫 메시지 참고: ${escHtml(runLog.firstMessageError)}</span>` : ''}
+        ${runLog?.placeholderUserSource ? `<span class="badge ${runLog.placeholderReplacementApplied ? 'ok' : 'neutral'}">기본 CBS 치환: ${runLog.placeholderReplacementApplied ? '적용' : '변경 없음'} · ${escHtml(runLog.placeholderUserSource)}</span>` : ''}
         ${runLog?.chatContextError ? `<span class="badge err">컨텍스트 오류: ${escHtml(runLog.chatContextError)}</span>` : ''}
         ${runLog?.preReused ? `<span class="badge ok">Pre-Agent 재사용됨</span>` : ''}
         ${runLog?.runLogEnabled === false ? `<span class="badge err">Run Log 꺼짐 · 표시 결과가 오래됐을 수 있음</span>` : '<span class="badge ok">Run Log 켜짐</span>'}
@@ -5952,6 +6033,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           logPromptFlow('Agents! debug: RisuAI original messages', messages, true);
           console.log(`Agents! debug: chat context source = ${chatContext.source}; available = ${chatContext.available}; messages = ${chatContext.messageCount}`);
           console.log(`Agents! debug: first message included = ${chatContext.firstMessageIncluded ? 'yes' : 'no'}; source = ${chatContext.firstMessageSource || '(none)'}`);
+          console.log(`Agents! debug: basic CBS replacement = ${chatContext.placeholderReplacementApplied ? 'applied' : 'unchanged'}; user source = ${chatContext.placeholderUserSource || '(none)'}`);
           if (chatContext.firstMessageError) console.log(`Agents! debug: first message note = ${chatContext.firstMessageError}`);
           if (chatContext.error) console.log(`Agents! debug: chat context error = ${chatContext.error}`);
           logPromptFlow('Agents! debug: messages used by Agents! context', chatContext.messages, true);
