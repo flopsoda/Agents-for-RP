@@ -1,7 +1,7 @@
 //@name risu_agents
 //@display-name Agents!
 //@api 3.0
-//@version 1.1.0
+//@version 1.1.2
 //@arg agents_provider string Analysis agent provider label. e.g. openai
 //@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
 //@arg agents_api_key string Analysis agent API key
@@ -1281,9 +1281,6 @@
     const DEFAULT_OUTPUT_POST_SUFFIX =
       '현재 응답 뒤에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
     const DEFAULT_OUTPUT_POST = DEFAULT_OUTPUT_POST_POLISH;
-    const DEFAULT_FINAL_POLISH_SYSTEM_PROMPT =
-      '당신은 RP 응답 최종 다듬기 에이전트입니다.\n' +
-      '메인 모델 응답을 전부 "전라도 사투리"로 바꿔주세요';
     const LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT =
       '당신은 대사와 말투 에이전트입니다.\n' +
       '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
@@ -1390,16 +1387,6 @@
         name: '대사 에이전트',
         modelPresetId: DEFAULT_MODEL_PRESET_ID,
         systemPrompt: DEFAULT_DIALOGUE_SYSTEM_PROMPT,
-      },
-      {
-        id: 'agent-final-polish',
-        row: MAIN_ROW_INDEX + 1,
-        column: 0,
-        name: '최종 다듬기 에이전트',
-        modelPresetId: DEFAULT_MODEL_PRESET_ID,
-        postMode: POST_MODE_POLISH,
-        systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
-        outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
       },
     ];
 
@@ -1578,7 +1565,6 @@
     function normalizePipelineConfig(raw, modelPresets = null) {
       const fallback = createEmptyPipeline();
       const sourceRows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
-      const sourceVersion = normalizePipelineVersion(raw);
 
       for (let row = 0; row < PIPELINE_ROW_COUNT; row += 1) {
         const sourceRow = sourceRows.find(r => Number(r?.row) === row) || sourceRows[row] || {};
@@ -1592,10 +1578,6 @@
         fallback.rows[row].agents.forEach((agent, idx) => {
           agent.column = idx;
         });
-      }
-
-      if (sourceVersion < PIPELINE_CONFIG_VERSION && !hasAnyPostAgent(fallback)) {
-        addDefaultPostAgent(fallback, modelPresets);
       }
 
       fallback.version = PIPELINE_CONFIG_VERSION;
@@ -1641,39 +1623,6 @@
         return DEFAULT_DIALOGUE_SYSTEM_PROMPT;
       }
       return systemPrompt;
-    }
-
-    function normalizePipelineVersion(raw) {
-      const version = Number(raw?.version);
-      return Number.isFinite(version) && version > 0 ? version : 1;
-    }
-
-    function hasAnyPostAgent(pipeline) {
-      for (let row = MAIN_ROW_INDEX + 1; row < PIPELINE_ROW_COUNT; row += 1) {
-        if ((pipeline.rows[row]?.agents || []).length > 0) return true;
-      }
-      return false;
-    }
-
-    function addDefaultPostAgent(pipeline, modelPresets = null) {
-      const row = MAIN_ROW_INDEX + 1;
-      if (!pipeline.rows[row]) return;
-      pipeline.rows[row].agents = [
-        normalizeAgent(defaultPostAgentPreset(), row, 0, modelPresets),
-      ];
-    }
-
-    function defaultPostAgentPreset() {
-      return DEFAULT_AGENT_PRESETS.find(agent => agent.id === 'agent-final-polish') || {
-        id: 'agent-final-polish',
-        row: MAIN_ROW_INDEX + 1,
-        column: 0,
-        name: '최종 다듬기 에이전트',
-        modelPresetId: DEFAULT_MODEL_PRESET_ID,
-        postMode: POST_MODE_POLISH,
-        systemPrompt: DEFAULT_FINAL_POLISH_SYSTEM_PROMPT,
-        outputInstruction: DEFAULT_OUTPUT_POST_POLISH,
-      };
     }
 
     function normalizePostMode(value) {
@@ -5798,7 +5747,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
     });
 
-    console.log('Agents! v1.0.0 loaded');
+    console.log('Agents! v1.1.2 loaded');
 
   } catch (err) {
     console.log(`Agents! init error: ${err.message}`);
