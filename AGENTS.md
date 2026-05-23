@@ -46,6 +46,8 @@ This project targets RisuAI plugin development. Use the local reference files in
 - Keep each commit scoped to one completed feature or fix.
 - Use short, clear English commit messages that describe the change.
 - Do not commit if the user explicitly says not to commit.
+- On this machine, GitHub CLI may not be on PATH. Use the absolute path
+  `C:\Program Files\GitHub CLI\gh.exe` when running `gh` commands.
 
 ## Release / Update Workflow
 
