@@ -56,6 +56,13 @@ This project targets RisuAI plugin development. Use the local reference files in
   - Keep existing `//@arg` keys unchanged unless the user explicitly requests a migration.
   - Commit the version bump as a separate release commit.
   - Push the commits to GitHub.
+  - Create and push a git tag matching the plugin version, prefixed with `v` (for example, `v1.1.4`).
+  - Create or update a GitHub Release for that tag using GitHub CLI.
+    - Prefer `gh release create <tag> --title <tag> --notes-file <file> --target main` for a new release.
+    - If the release already exists, use `gh release edit <tag> --title <tag> --notes-file <file>`.
+    - Write concise release notes from the commits since the previous plugin version, with user-facing sections such as `Added`, `Changed`, `Fixed`, and `Notes`.
+    - Include any migration or setting-loss warning that users need before updating.
+  - If `gh` is unavailable or not authenticated, still push the commit and tag, then report the blocker and provide the exact release notes text for manual publishing.
 - If the user says no, do not change `//@version` and do not push unless the user explicitly asks.
 
 ## Documentation Policy
