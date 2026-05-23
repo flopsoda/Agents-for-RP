@@ -137,25 +137,28 @@
     };
     const PIPELINE_ROW_COUNT = 9;
     const MAIN_ROW_INDEX = 4;
+    const AGENTS_CONFIG_VAULT_KEY = 'risu_agents_config_vault_v1';
+    const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
 
     // ── 설정 로드 ─────────────────────────────────────────────────────────────
 
     async function getConfig() {
-      const provider = (await Risuai.getArgument('agents_provider')) || DEFAULT_AGENT_PROVIDER;
-      const baseUrl = normalizeUrl((await Risuai.getArgument('agents_base_url')) || DEFAULT_AGENT_BASE_URL);
-      const configuredApiKey  = (await Risuai.getArgument('agents_api_key'))  || '';
-      const model   = (await Risuai.getArgument('agents_model'))    || DEFAULT_AGENT_MODEL;
-      const temperature = parseFloat((await Risuai.getArgument('agents_temperature')) || '0.7');
-      const maxTokens = parseOptionalInt(await Risuai.getArgument('agents_max_tokens'));
-      const window  = Math.max(1, parseInt((await Risuai.getArgument('agents_context_window')) || '10') || 10);
-      const debugLog = parseBool(await Risuai.getArgument('agents_debug_log'), false);
-      const runLogEnabled = parseBool(await Risuai.getArgument('agents_run_log_enabled'), false);
-      const bypassAuxRequests = parseBool(await Risuai.getArgument('agents_bypass_aux_requests'), true);
-      const extraBodyJson = String((await Risuai.getArgument('agents_extra_body_json')) || '').trim();
-      const proxyUrl = normalizeProxyUrl(await Risuai.getArgument('agents_proxy_url'));
-      const proxyKey = String((await Risuai.getArgument('agents_proxy_key')) || '').trim();
-      const proxyDirect = parseBool(await Risuai.getArgument('agents_proxy_direct'), false);
+      const vault = await loadConfigVault();
+      const provider = String(preferArgumentValue(await Risuai.getArgument('agents_provider'), vault.provider || DEFAULT_AGENT_PROVIDER));
+      const baseUrl = normalizeUrl(preferArgumentValue(await Risuai.getArgument('agents_base_url'), vault.baseUrl || DEFAULT_AGENT_BASE_URL));
+      const configuredApiKey  = String(preferArgumentValue(await Risuai.getArgument('agents_api_key'), vault.configuredApiKey || vault.apiKey || ''));
+      const model   = String(preferArgumentValue(await Risuai.getArgument('agents_model'), vault.model || DEFAULT_AGENT_MODEL));
+      const temperature = parseFloat(String(preferArgumentValue(await Risuai.getArgument('agents_temperature'), vault.temperature ?? '0.7')));
+      const maxTokens = parseOptionalInt(preferArgumentValue(await Risuai.getArgument('agents_max_tokens'), vault.maxTokens ?? ''));
+      const window  = Math.max(1, parseInt(preferArgumentValue(await Risuai.getArgument('agents_context_window'), vault.window || '10')) || 10);
+      const debugLog = parseBool(preferArgumentValue(await Risuai.getArgument('agents_debug_log'), vault.debugLog ?? false), false);
+      const runLogEnabled = parseBool(preferArgumentValue(await Risuai.getArgument('agents_run_log_enabled'), vault.runLogEnabled ?? false), false);
+      const bypassAuxRequests = parseBool(preferArgumentValue(await Risuai.getArgument('agents_bypass_aux_requests'), vault.bypassAuxRequests ?? true), true);
+      const extraBodyJson = String(preferArgumentValue(await Risuai.getArgument('agents_extra_body_json'), vault.extraBodyJson || '')).trim();
+      const proxyUrl = normalizeProxyUrl(preferArgumentValue(await Risuai.getArgument('agents_proxy_url'), vault.proxyUrl || ''));
+      const proxyKey = String(preferArgumentValue(await Risuai.getArgument('agents_proxy_key'), vault.proxyKey || '')).trim();
+      const proxyDirect = parseBool(preferArgumentValue(await Risuai.getArgument('agents_proxy_direct'), vault.proxyDirect ?? false), false);
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -164,19 +167,36 @@
         maxTokens,
         window,
       };
-      const providerKeys = parseProviderKeys(
+      const providerKeysRaw = preferArgumentValue(
         await Risuai.getArgument('agents_provider_keys_json'),
+        vault.providerKeys ? JSON.stringify(vault.providerKeys) : '',
+      );
+      const modelPresetsRaw = preferArgumentValue(
+        await Risuai.getArgument('agents_model_presets_json'),
+        vault.modelPresets ? JSON.stringify(vault.modelPresets) : '',
+      );
+      const pipelineRaw = await Risuai.getArgument('agents_pipeline_json');
+      const providerKeys = parseProviderKeys(
+        providerKeysRaw,
         provider,
         configuredApiKey,
         debugLog,
       );
       const modelPresets = parseModelPresets(
-        await Risuai.getArgument('agents_model_presets_json'),
+        modelPresetsRaw,
         fallbackConfig,
         debugLog,
       );
+      let pipeline = vault.pipeline || null;
+      if (!pipeline && pipelineRaw) {
+        try {
+          pipeline = normalizePipelineConfig(JSON.parse(String(pipelineRaw)), modelPresets);
+        } catch (err) {
+          if (debugLog) console.log(`Agents! config vault pipeline fallback parse failed: ${err.message}`);
+        }
+      }
       const apiKey = getProviderApiKey(providerKeys, provider) || configuredApiKey;
-      return {
+      const config = {
         provider,
         baseUrl,
         apiKey,
@@ -194,6 +214,92 @@
         proxyUrl,
         proxyKey,
         proxyDirect,
+        pipeline,
+        pipelinePresetStore: vault.pipelinePresetStore || null,
+      };
+      if (!vault.exists) await saveConfigVault(config, debugLog);
+      return config;
+    }
+
+    function preferArgumentValue(argValue, fallbackValue) {
+      if (argValue === undefined || argValue === null || String(argValue) === '') return fallbackValue;
+      return argValue;
+    }
+
+    async function loadConfigVault(debugLog = false) {
+      try {
+        const raw = await Risuai.pluginStorage.getItem(AGENTS_CONFIG_VAULT_KEY);
+        const vault = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!vault || vault.version !== AGENTS_CONFIG_VAULT_VERSION) return { exists: false };
+        return { exists: true, ...normalizeConfigVault(vault.config || {}) };
+      } catch (err) {
+        if (debugLog) console.log(`Agents! config vault load failed: ${err.message}`);
+        return { exists: false };
+      }
+    }
+
+    async function saveConfigVault(conf, debugLog = false) {
+      try {
+        await Risuai.pluginStorage.setItem(AGENTS_CONFIG_VAULT_KEY, {
+          version: AGENTS_CONFIG_VAULT_VERSION,
+          savedAt: new Date().toISOString(),
+          config: normalizeConfigVault(conf),
+        });
+      } catch (err) {
+        if (debugLog) console.log(`Agents! config vault save failed: ${err.message}`);
+      }
+    }
+
+    function normalizeConfigVault(conf) {
+      const provider = String(conf?.provider || DEFAULT_AGENT_PROVIDER);
+      const baseUrl = normalizeUrl(conf?.baseUrl || DEFAULT_AGENT_BASE_URL);
+      const temperature = Number.isFinite(Number(conf?.temperature)) ? Number(conf.temperature) : 0.7;
+      const maxTokens = conf?.maxTokens === null || conf?.maxTokens === undefined || conf?.maxTokens === ''
+        ? null
+        : parseOptionalInt(conf.maxTokens);
+      const window = Math.max(1, parseInt(conf?.window || '10') || 10);
+      const fallbackConfig = {
+        provider,
+        baseUrl,
+        model: String(conf?.model || DEFAULT_AGENT_MODEL),
+        temperature,
+        maxTokens,
+        window,
+      };
+      const providerKeys = parseProviderKeys(
+        conf?.providerKeys ? JSON.stringify(conf.providerKeys) : '',
+        provider,
+        conf?.configuredApiKey || conf?.apiKey || '',
+        conf?.debugLog === true,
+      );
+      const modelPresets = normalizeModelPresets(conf?.modelPresets || [], fallbackConfig);
+      const pipelinePresetStore = conf?.pipelinePresetStore
+        ? normalizePipelinePresetStore(conf.pipelinePresetStore, conf?.pipeline, modelPresets)
+        : null;
+      const activePipeline = pipelinePresetStore
+        ? getActivePipelinePreset(pipelinePresetStore)?.pipeline
+        : conf?.pipeline;
+
+      return {
+        provider,
+        baseUrl,
+        apiKey: String(conf?.apiKey || getProviderApiKey(providerKeys, provider) || ''),
+        configuredApiKey: String(conf?.configuredApiKey || ''),
+        model: fallbackConfig.model,
+        temperature,
+        maxTokens,
+        window,
+        debugLog: conf?.debugLog === true,
+        runLogEnabled: conf?.runLogEnabled === true,
+        bypassAuxRequests: conf?.bypassAuxRequests !== false,
+        extraBodyJson: normalizeExtraBodyJson(conf?.extraBodyJson || ''),
+        proxyUrl: normalizeProxyUrl(conf?.proxyUrl || ''),
+        proxyKey: String(conf?.proxyKey || ''),
+        proxyDirect: conf?.proxyDirect === true,
+        modelPresets,
+        providerKeys,
+        pipeline: activePipeline ? normalizePipelineConfig(activePipeline, modelPresets) : null,
+        pipelinePresetStore,
       };
     }
 
@@ -1530,9 +1636,9 @@
     async function getPipelinePresetStore(conf) {
       const legacyRaw = await Risuai.getArgument('agents_pipeline_json');
       let fallbackPipeline = defaultPipelineConfig();
-      if (legacyRaw) {
+      if (legacyRaw || conf?.pipeline) {
         try {
-          fallbackPipeline = normalizePipelineConfig(JSON.parse(String(legacyRaw)), conf?.modelPresets);
+          fallbackPipeline = normalizePipelineConfig(legacyRaw ? JSON.parse(String(legacyRaw)) : conf.pipeline, conf?.modelPresets);
         } catch (err) {
           if (conf?.debugLog) console.log(`Agents! legacy pipeline JSON parse failed: ${err.message}`);
         }
@@ -1540,7 +1646,7 @@
 
       try {
         const rawStore = await Risuai.pluginStorage.getItem(PIPELINE_PRESETS_STORAGE_KEY);
-        const store = normalizePipelinePresetStore(rawStore, fallbackPipeline, conf?.modelPresets);
+        const store = normalizePipelinePresetStore(rawStore || conf?.pipelinePresetStore, fallbackPipeline, conf?.modelPresets);
         if (!rawStore) {
           await Risuai.pluginStorage.setItem(PIPELINE_PRESETS_STORAGE_KEY, store);
         }
@@ -3453,6 +3559,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('run-log-toggle-btn')?.addEventListener('click', async () => {
         const nextEnabled = runLog?.runLogEnabled === false;
         await Risuai.setArgument('agents_run_log_enabled', String(nextEnabled));
+        await saveConfigVault({ ...conf, runLogEnabled: nextEnabled, pipeline }, conf?.debugLog);
         await openRunInspector();
       });
 
@@ -4891,6 +4998,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         maxTokens: parseOptionalInt(firstPreset.maxTokens),
         window: Math.max(1, parseInt(firstPreset.contextWindow, 10) || 10),
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
+        runLogEnabled: initialConf.runLogEnabled === true,
         bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
         extraBodyJson: normalizeExtraBodyJson(getInputValue('agents_extra_body_json')),
         proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
@@ -4912,6 +5020,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_max_tokens', conf.maxTokens === null ? '' : String(conf.maxTokens));
       await Risuai.setArgument('agents_context_window', String(conf.window));
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
+      await Risuai.setArgument('agents_run_log_enabled', String(conf.runLogEnabled === true));
       await Risuai.setArgument('agents_bypass_aux_requests', String(conf.bypassAuxRequests));
       await Risuai.setArgument('agents_extra_body_json', conf.extraBodyJson || '');
       await Risuai.setArgument('agents_proxy_url', conf.proxyUrl || '');
@@ -4920,6 +5029,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       conf.pipelinePresetStore = await savePipelinePresetStore(conf.pipelinePresetStore, conf.pipeline, conf);
       await Risuai.setArgument('agents_model_presets_json', JSON.stringify(conf.modelPresets));
       await Risuai.setArgument('agents_provider_keys_json', JSON.stringify(conf.providerKeys));
+      await saveConfigVault(conf, conf.debugLog);
     }
 
     async function testLiteLlm() {
