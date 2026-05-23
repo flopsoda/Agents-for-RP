@@ -939,6 +939,80 @@
       return chats[page] || chats[0] || null;
     }
 
+    async function resolveCurrentFirstMessage(chat, debugLog) {
+      const empty = {
+        message: '',
+        included: false,
+        source: '',
+        index: null,
+        error: '',
+      };
+
+      let character = null;
+      try {
+        character = await Risuai.getCharacter();
+      } catch (err) {
+        const error = `getCharacter: ${err.message}`;
+        if (debugLog) console.log(`Agents! first message: ${error}`);
+        return { ...empty, error };
+      }
+
+      if (!character || character.type === 'group') {
+        return { ...empty, source: character?.type === 'group' ? 'group-skipped' : 'character-missing' };
+      }
+
+      const firstMessage = String(character.firstMessage || '').trim();
+      const alternateGreetings = Array.isArray(character.alternateGreetings) ? character.alternateGreetings : [];
+      const rawIndex = Number(chat?.fmIndex);
+      const index = Number.isInteger(rawIndex) ? rawIndex : -1;
+
+      if (index >= 0) {
+        const alternate = String(alternateGreetings[index] || '').trim();
+        if (alternate) {
+          return {
+            ...empty,
+            message: alternate,
+            source: `alternateGreetings[${index}]`,
+            index,
+          };
+        }
+
+        return {
+          ...empty,
+          message: firstMessage,
+          source: `alternateGreetings[${index}]->firstMessage`,
+          index,
+          error: alternateGreetings[index] === undefined ? 'alternate greeting not found' : 'alternate greeting empty',
+        };
+      }
+
+      return {
+        ...empty,
+        message: firstMessage,
+        source: 'firstMessage',
+        index: -1,
+      };
+    }
+
+    function withVirtualFirstMessage(messages, firstMessageInfo) {
+      const content = String(firstMessageInfo?.message || '').trim();
+      if (!content) return { messages, included: false };
+
+      const firstStored = Array.isArray(messages) ? messages[0] : null;
+      if (firstStored?.role === 'assistant' && sameChatContent(firstStored.content, content)) {
+        return { messages, included: false };
+      }
+
+      return {
+        messages: [{ role: 'assistant', content }, ...messages],
+        included: true,
+      };
+    }
+
+    function sameChatContent(left, right) {
+      return normalizeForMatch(left) === normalizeForMatch(right);
+    }
+
     async function loadActualChatContext(_requestMessages, debugLog) {
       const fallback = {
         available: false,
@@ -949,6 +1023,10 @@
         storedMessageCount: 0,
         appendedCurrentUser: false,
         trimmedToCurrentUser: false,
+        firstMessageIncluded: false,
+        firstMessageSource: '',
+        firstMessageIndex: null,
+        firstMessageError: '',
       };
 
       const errors = [];
@@ -993,6 +1071,8 @@
         };
       }
 
+      const firstMessageInfo = await resolveCurrentFirstMessage(chat, debugLog);
+
       const rawMessages = chat?.message;
       if (!Array.isArray(rawMessages)) {
         return {
@@ -1000,31 +1080,43 @@
           error: `chat.message array not found; keys=${objectKeysPreview(chat)}`,
           characterIndex,
           chatIndex,
+          firstMessageSource: firstMessageInfo.source,
+          firstMessageIndex: firstMessageInfo.index,
+          firstMessageError: firstMessageInfo.error,
         };
       }
 
       const normalizedMessages = rawMessages
         .map(normalizeStoredChatMessage)
         .filter(Boolean);
-      const lastUserIndex = findLastIndex(normalizedMessages, msg => msg.role === 'user');
+      const firstMessageContext = withVirtualFirstMessage(normalizedMessages, firstMessageInfo);
+      const contextMessages = firstMessageContext.messages;
+      const lastUserIndex = findLastIndex(contextMessages, msg => msg.role === 'user');
       if (lastUserIndex < 0) {
         return {
           ...fallback,
-          source: 'chat.message',
+          source: firstMessageContext.included ? 'chat.message+first-message' : 'chat.message',
           error: 'user message not found in chat.message',
           characterIndex,
           chatIndex,
           storedMessageCount: normalizedMessages.length,
+          firstMessageIncluded: firstMessageContext.included,
+          firstMessageSource: firstMessageInfo.source,
+          firstMessageIndex: firstMessageInfo.index,
+          firstMessageError: firstMessageInfo.error,
         };
       }
 
-      const trimmedToCurrentUser = lastUserIndex < normalizedMessages.length - 1;
-      const messages = normalizedMessages.slice(0, lastUserIndex + 1);
+      const trimmedToCurrentUser = lastUserIndex < contextMessages.length - 1;
+      const messages = contextMessages.slice(0, lastUserIndex + 1);
+      const sourceParts = ['chat.message'];
+      if (firstMessageContext.included) sourceParts.push('first-message');
+      if (trimmedToCurrentUser) sourceParts.push('trimmed-to-last-user');
 
       return {
         available: true,
         messages,
-        source: `chat.message${trimmedToCurrentUser ? '+trimmed-to-last-user' : ''}`,
+        source: sourceParts.join('+'),
         error: '',
         characterIndex,
         chatIndex,
@@ -1032,6 +1124,10 @@
         storedMessageCount: normalizedMessages.length,
         appendedCurrentUser: false,
         trimmedToCurrentUser,
+        firstMessageIncluded: firstMessageContext.included,
+        firstMessageSource: firstMessageInfo.source,
+        firstMessageIndex: firstMessageInfo.index,
+        firstMessageError: firstMessageInfo.error,
       };
     }
 
@@ -2601,6 +2697,10 @@
         chatContextMessageCount: chatContext?.messageCount ?? 0,
         chatContextStoredMessageCount: chatContext?.storedMessageCount ?? null,
         chatContextAppendedCurrentUser: Boolean(chatContext?.appendedCurrentUser),
+        firstMessageIncluded: Boolean(chatContext?.firstMessageIncluded),
+        firstMessageSource: chatContext?.firstMessageSource || '',
+        firstMessageIndex: chatContext?.firstMessageIndex ?? null,
+        firstMessageError: chatContext?.firstMessageError || '',
       };
     }
 
@@ -3583,6 +3683,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${runLog?.chatKeyDisplay || runLog?.chatKey ? `<span class="badge neutral">채팅방 키: ${escHtml(runLog.chatKeyDisplay || formatChatKeyPreview(runLog.chatKey))}</span>` : ''}
         ${runLog?.chatScopeAvailable === false ? `<span class="badge err">채팅방 스코프 없음${runLog.chatScopeError ? `: ${escHtml(runLog.chatScopeError)}` : ''}</span>` : ''}
         ${runLog?.chatContextSource ? `<span class="badge ${runLog.chatContextAvailable ? 'ok' : 'err'}">대화 컨텍스트: ${escHtml(runLog.chatContextSource)} · ${escHtml(runLog.chatContextMessageCount ?? 0)}개</span>` : ''}
+        ${runLog?.firstMessageSource ? `<span class="badge ${runLog.firstMessageIncluded ? 'ok' : 'neutral'}">첫 메시지: ${runLog.firstMessageIncluded ? '포함' : '미포함'} · ${escHtml(runLog.firstMessageSource)}</span>` : ''}
+        ${runLog?.firstMessageError ? `<span class="badge neutral">첫 메시지 참고: ${escHtml(runLog.firstMessageError)}</span>` : ''}
         ${runLog?.chatContextError ? `<span class="badge err">컨텍스트 오류: ${escHtml(runLog.chatContextError)}</span>` : ''}
         ${runLog?.preReused ? `<span class="badge ok">Pre-Agent 재사용됨</span>` : ''}
         ${runLog?.runLogEnabled === false ? `<span class="badge err">Run Log 꺼짐 · 표시 결과가 오래됐을 수 있음</span>` : '<span class="badge ok">Run Log 켜짐</span>'}
@@ -4584,7 +4686,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             '(실제 요청에 포함된 활성 로어북이 들어갑니다)',
           ].join('\n'),
           history:
-            '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다)',
+            '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다. 짧은 대화에서는 봇 첫 메시지도 포함됩니다)',
           userInput:
             '(실제 사용자의 최신 입력이 들어갑니다)',
           notes: placeholderNotes,
@@ -5849,6 +5951,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           console.log('Agents! debug: beforeRequest type =', type);
           logPromptFlow('Agents! debug: RisuAI original messages', messages, true);
           console.log(`Agents! debug: chat context source = ${chatContext.source}; available = ${chatContext.available}; messages = ${chatContext.messageCount}`);
+          console.log(`Agents! debug: first message included = ${chatContext.firstMessageIncluded ? 'yes' : 'no'}; source = ${chatContext.firstMessageSource || '(none)'}`);
+          if (chatContext.firstMessageError) console.log(`Agents! debug: first message note = ${chatContext.firstMessageError}`);
           if (chatContext.error) console.log(`Agents! debug: chat context error = ${chatContext.error}`);
           logPromptFlow('Agents! debug: messages used by Agents! context', chatContext.messages, true);
           logTextBlock('Agents! debug: setting blocks passed to agents', settingBlocks.content);
