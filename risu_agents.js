@@ -1071,13 +1071,9 @@
       let result = String(text || '');
       const characterName = String(placeholderContext?.characterName || '');
       if (characterName) {
-        result = result
-          .replace(/\{\{char\}\}/g, characterName)
-          .replace(/\{\{Char\}\}/g, characterName);
+        result = result.replace(/\{\{char\}\}/gi, characterName);
       }
-      return result
-        .replace(/\{\{user\}\}/g, placeholderContext?.userName || 'User')
-        .replace(/\{\{User\}\}/g, placeholderContext?.userName || 'User');
+      return result.replace(/\{\{user\}\}/gi, placeholderContext?.userName || 'User');
     }
 
     async function loadActualChatContext(_requestMessages, debugLog) {
