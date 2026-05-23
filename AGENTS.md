@@ -47,6 +47,17 @@ This project targets RisuAI plugin development. Use the local reference files in
 - Use short, clear English commit messages that describe the change.
 - Do not commit if the user explicitly says not to commit.
 
+## Release / Update Workflow
+
+- After completing and committing a code change, ask the user whether this change should be released as a plugin update.
+- If the user says yes:
+  - Update the `//@version` metadata in `risu_agents.js`.
+  - Keep `//@name risu_agents` unchanged.
+  - Keep existing `//@arg` keys unchanged unless the user explicitly requests a migration.
+  - Commit the version bump as a separate release commit.
+  - Push the commits to GitHub.
+- If the user says no, do not change `//@version` and do not push unless the user explicitly asks.
+
 ## Documentation Policy
 
 - Prefer current files copied from the RisuAI GitHub repository over old Wiki pages.
