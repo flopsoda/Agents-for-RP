@@ -690,7 +690,8 @@
         ? chatContext.messages
         : normalizeRequestMessages(requestMessages);
       const maxWindow = Math.max(1, maxPreAgentContextWindow(pipeline, conf) || conf?.window || 10);
-      const loreCandidates = collectLorebookCandidates(sources.character, sources.db);
+      const currentChatContext = await loadCurrentChatForSettings(sources.character, conf?.debugLog);
+      const loreCandidates = collectLorebookCandidates(sources.character, sources.db, currentChatContext);
       const loreMatch = matchActiveLorebooksLikeRisu(contextMessages, loreCandidates, {
         scanWindow: maxWindow,
         fullWordMatching: sources.character?.loreSettings?.fullWordMatching === true,
@@ -700,6 +701,7 @@
         character: sources.character,
         db: sources.db,
         dbAvailable: sources.dbAvailable,
+        currentChatContext,
         activeLorebooks: loreMatch.activeLorebooks,
         loreCandidates,
         loreStats: loreMatch.stats,
@@ -713,6 +715,7 @@
         activeLorebooks: loreMatch.activeLorebooks,
         loreStats: loreMatch.stats,
         settingBlocks,
+        currentChatContext,
         historyForWindow(windowSize) {
           const key = Math.max(1, parseInt(windowSize, 10) || maxWindow);
           if (!historyCache.has(key)) {
@@ -753,6 +756,57 @@
       return { character, db, dbAvailable };
     }
 
+    async function loadCurrentChatForSettings(character, debugLog) {
+      const fallbackChat = getCurrentCharacterChat(character);
+      const fallback = {
+        chat: fallbackChat,
+        characterIndex: null,
+        chatIndex: Number.isInteger(character?.chatPage) ? character.chatPage : null,
+        source: fallbackChat ? 'fallback' : 'missing',
+        error: '',
+      };
+
+      const errors = [];
+      let characterIndex = null;
+      let chatIndex = null;
+      try {
+        characterIndex = await Risuai.getCurrentCharacterIndex();
+      } catch (err) {
+        errors.push(`getCurrentCharacterIndex: ${err.message}`);
+      }
+      try {
+        chatIndex = await Risuai.getCurrentChatIndex();
+      } catch (err) {
+        errors.push(`getCurrentChatIndex: ${err.message}`);
+      }
+
+      if (!Number.isFinite(Number(characterIndex)) || !Number.isFinite(Number(chatIndex))) {
+        const error = errors.join('; ') || 'current character/chat index unavailable';
+        if (debugLog) console.log(`Agents! setting blocks: current chat fallback used (${error})`);
+        return { ...fallback, error };
+      }
+
+      try {
+        const chat = await Risuai.getChatFromIndex(parseInt(characterIndex, 10), parseInt(chatIndex, 10));
+        if (chat) {
+          return {
+            chat,
+            characterIndex: parseInt(characterIndex, 10),
+            chatIndex: parseInt(chatIndex, 10),
+            source: 'getChatFromIndex',
+            error: '',
+          };
+        }
+        const error = 'getChatFromIndex: current chat object not found';
+        if (debugLog) console.log(`Agents! setting blocks: current chat fallback used (${error})`);
+        return { ...fallback, characterIndex, chatIndex, error };
+      } catch (err) {
+        const error = `getChatFromIndex: ${err.message}`;
+        if (debugLog) console.log(`Agents! setting blocks: current chat fallback used (${error})`);
+        return { ...fallback, characterIndex, chatIndex, error };
+      }
+    }
+
     async function buildSettingBlocks(messages, options = {}) {
       const parts = {
         characterDescription: '(캐릭터 설명 없음)',
@@ -764,6 +818,9 @@
         character: 'missing',
         persona: 'db-null',
         authorNote: 'missing',
+        authorNoteSource: 'missing',
+        chatLoreSource: options.currentChatContext?.source || 'missing',
+        currentChatError: options.currentChatContext?.error || '',
         loreCandidates: 0,
         activeLorebooks: 0,
       };
@@ -771,6 +828,7 @@
       let character = options.character || null;
       let db = options.db || null;
       let dbAvailable = options.dbAvailable === true || Boolean(db);
+      const currentChatContext = options.currentChatContext || null;
 
       if (!character && !db && options.character === undefined && options.db === undefined) {
         const sources = await loadSettingSources(false);
@@ -786,11 +844,16 @@
           stats.character = 'found';
         }
 
-        const chat = getCurrentCharacterChat(character);
+        const chat = currentChatContext?.chat || getCurrentCharacterChat(character);
+        const chatSource = currentChatContext?.chat === chat
+          ? currentChatContext.source
+          : chat ? 'fallback' : 'missing';
+        stats.chatLoreSource = chatSource;
         const note = String(chat?.note || '').trim();
         if (note) {
           parts.authorNote = note;
           stats.authorNote = 'found';
+          stats.authorNoteSource = chatSource;
         }
       }
 
@@ -814,7 +877,7 @@
 
       const loreCandidates = Array.isArray(options.loreCandidates)
         ? options.loreCandidates
-        : collectLorebookCandidates(character, db);
+        : collectLorebookCandidates(character, db, currentChatContext);
       const activeLorebooks = Array.isArray(options.activeLorebooks)
         ? options.activeLorebooks
         : matchActiveLorebooksLikeRisu(normalizeRequestMessages(messages), loreCandidates, {
@@ -1009,7 +1072,7 @@
       return personas[0];
     }
 
-    function collectLorebookCandidates(character, db) {
+    function collectLorebookCandidates(character, db, currentChatContext = null) {
       const candidates = [];
       const seen = new Set();
 
@@ -1029,7 +1092,7 @@
           character.globalLore.forEach((lore, idx) => addLore(lore, '캐릭터 로어북', 'character', idx));
         }
 
-        const chat = getCurrentCharacterChat(character);
+        const chat = currentChatContext?.chat || getCurrentCharacterChat(character);
         if (Array.isArray(chat?.localLore)) {
           chat.localLore.forEach((lore, idx) => addLore(lore, '채팅 로어북', 'chat', idx));
         }
@@ -5704,6 +5767,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       console.log(`character: ${stats.character}`);
       console.log(`persona: ${stats.persona}`);
       console.log(`authorNote: ${stats.authorNote}`);
+      if (stats.authorNoteSource) console.log(`authorNoteSource: ${stats.authorNoteSource}`);
+      if (stats.chatLoreSource) console.log(`chatLoreSource: ${stats.chatLoreSource}`);
+      if (stats.currentChatError) console.log(`currentChatError: ${stats.currentChatError}`);
       console.log(`loreCandidates: ${stats.loreCandidates}`);
       console.log(`activeLorebooks: ${stats.activeLorebooks}`);
       if (stats.loreMatchMode) console.log(`loreMatchMode: ${stats.loreMatchMode}`);
