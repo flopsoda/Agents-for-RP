@@ -523,10 +523,12 @@
     }
 
     async function callVertexAgent(conf, messages) {
+      const vertexCredential = parseVertexCredential(conf.apiKey);
+      const baseUrl = resolveVertexBaseUrl(conf.baseUrl, vertexCredential);
       const accessToken = await getVertexAccessToken(conf.apiKey);
       const payload = buildChatCompletionPayload(conf, messages);
 
-      const url = `${conf.baseUrl}/chat/completions`;
+      const url = `${baseUrl}/chat/completions`;
       logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
@@ -5019,10 +5021,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
 
       if (isVertexProvider(conf.provider)) {
+        const vertexCredential = parseVertexCredential(conf.apiKey);
+        const baseUrl = resolveVertexBaseUrl(conf.baseUrl, vertexCredential);
+        const url = `${baseUrl}/chat/completions`;
         logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Vertex token start', 'https://oauth2.googleapis.com/token');
         await getVertexAccessToken(conf.apiKey);
         logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Vertex token response 200', 'https://oauth2.googleapis.com/token');
-        return { status: 200, url: 'https://oauth2.googleapis.com/token' };
+        return { status: 200, url };
       }
 
       const url = `${conf.baseUrl}/models`;
@@ -5310,17 +5315,40 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       });
     }
 
-    function validateVertexCredential(text) {
+    function parseVertexCredential(text) {
       try {
         const parsed = JSON.parse(text);
         const missing = ['type', 'project_id', 'client_email', 'private_key'].filter(key => !parsed[key]);
-        if (missing.length) {
-          return { ok: false, error: `필수 필드 누락: ${missing.join(', ')}` };
-        }
+        if (missing.length) throw new Error(`필수 필드 누락: ${missing.join(', ')}`);
+        return parsed;
+      } catch (err) {
+        if (err instanceof SyntaxError) throw new Error(`JSON 파싱 실패: ${err.message}`);
+        throw err;
+      }
+    }
+
+    function validateVertexCredential(text) {
+      try {
+        parseVertexCredential(text);
         return { ok: true, error: '' };
       } catch (err) {
-        return { ok: false, error: `JSON 파싱 실패: ${err.message}` };
+        return { ok: false, error: err.message };
       }
+    }
+
+    function resolveVertexBaseUrl(baseUrl, credential) {
+      const projectId = String(credential?.project_id || '').trim();
+      let resolved = normalizeUrl(baseUrl);
+      if (resolved.includes('PROJECT_ID')) {
+        if (!projectId) {
+          throw new Error('Vertex AI Base URL의 PROJECT_ID를 치환할 수 없습니다: service account JSON의 project_id가 없습니다.');
+        }
+        resolved = resolved.replace(/PROJECT_ID/g, encodeURIComponent(projectId));
+      }
+      if (resolved.includes('PROJECT_ID')) {
+        throw new Error('Vertex AI Base URL의 PROJECT_ID를 치환할 수 없습니다.');
+      }
+      return resolved;
     }
 
     async function getVertexAccessToken(text) {
@@ -5329,10 +5357,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         return vertexTokenCache.token;
       }
 
-      const validation = validateVertexCredential(text);
-      if (!validation.ok) throw new Error(validation.error);
-
-      const info = JSON.parse(text);
+      const info = parseVertexCredential(text);
       const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
       const claim = base64UrlJson({
         iss: info.client_email,
