@@ -755,6 +755,7 @@
           'selectedPersona',
           'modules',
           'enabledModules',
+          'globalChatVariables',
         ]);
         dbAvailable = Boolean(db);
       } catch (err) {
@@ -1105,6 +1106,7 @@
         userName: user.name,
         userSource: user.source,
         chatVars: normalizeAgentCbsChatVars(chat?.scriptstate),
+        globalVars: normalizeAgentCbsChatVars(db?.globalChatVariables),
         defaultVars: parseAgentCbsDefaultVariables(character?.defaultVariables),
         randomSeedText: `${String(character?.chaId ?? '')}${String(chat?.id ?? '')}`,
         randomMessageCount: messageCount,
@@ -1169,6 +1171,151 @@
       return 'null';
     }
 
+    function readAgentCbsGlobalVar(name, cbsContext) {
+      const rawName = String(name || '').trim();
+      if (!rawName) return 'null';
+      const globalVars = cbsContext?.globalVars || {};
+      if (Object.prototype.hasOwnProperty.call(globalVars, rawName)) return String(globalVars[rawName]);
+      return 'null';
+    }
+
+    function agentCbsCalcString(expression, cbsContext) {
+      let depthText = [''];
+      const text = String(expression || '');
+      for (let idx = 0; idx < text.length; idx += 1) {
+        const char = text[idx];
+        if (char === '(') {
+          depthText.push('');
+        } else if (char === ')' && depthText.length > 1) {
+          const result = agentCbsExecuteRpnCalculation(depthText.pop(), cbsContext);
+          depthText[depthText.length - 1] += result;
+        } else {
+          depthText[depthText.length - 1] += char;
+        }
+      }
+      return agentCbsExecuteRpnCalculation(depthText.join(''), cbsContext);
+    }
+
+    function agentCbsExecuteRpnCalculation(expression, cbsContext) {
+      const text = String(expression || '')
+        .replace(/\$([a-zA-Z0-9_]+)/g, (_, key) => agentCbsNumberForCalc(readAgentCbsVar(key, cbsContext)))
+        .replace(/\@([a-zA-Z0-9_]+)/g, (_, key) => agentCbsNumberForCalc(readAgentCbsGlobalVar(key, cbsContext)))
+        .replace(/&&/g, '&')
+        .replace(/\|\|/g, '|')
+        .replace(/<=/g, '≤')
+        .replace(/>=/g, '≥')
+        .replace(/==/g, '=')
+        .replace(/!=/g, '≠')
+        .replace(/null/gi, '0');
+      return agentCbsCalculateRpn(agentCbsToRpn(text));
+    }
+
+    function agentCbsNumberForCalc(value) {
+      const parsed = parseFloat(String(value ?? ''));
+      return Number.isNaN(parsed) ? '0' : parsed.toString();
+    }
+
+    function agentCbsToRpn(expression) {
+      let outputQueue = '';
+      const operatorStack = [];
+      const operators = {
+        '+': { precedence: 2, associativity: 'Left' },
+        '-': { precedence: 2, associativity: 'Left' },
+        '*': { precedence: 3, associativity: 'Left' },
+        '/': { precedence: 3, associativity: 'Left' },
+        '^': { precedence: 4, associativity: 'Left' },
+        '%': { precedence: 3, associativity: 'Left' },
+        '<': { precedence: 1, associativity: 'Left' },
+        '>': { precedence: 1, associativity: 'Left' },
+        '|': { precedence: 1, associativity: 'Left' },
+        '&': { precedence: 1, associativity: 'Left' },
+        '≤': { precedence: 1, associativity: 'Left' },
+        '≥': { precedence: 1, associativity: 'Left' },
+        '=': { precedence: 1, associativity: 'Left' },
+        '≠': { precedence: 1, associativity: 'Left' },
+        '!': { precedence: 5, associativity: 'Right' },
+      };
+      const operatorKeys = Object.keys(operators);
+      const compact = String(expression || '').replace(/\s+/g, '');
+      const expressionParts = [];
+      let lastToken = '';
+
+      for (let idx = 0; idx < compact.length; idx += 1) {
+        const char = compact[idx];
+        if (char === '-' && (idx === 0 || operatorKeys.includes(compact[idx - 1]) || compact[idx - 1] === '(')) {
+          lastToken += char;
+        } else if (operatorKeys.includes(char)) {
+          expressionParts.push(lastToken !== '' ? lastToken : '0');
+          lastToken = '';
+          expressionParts.push(char);
+        } else {
+          lastToken += char;
+        }
+      }
+
+      expressionParts.push(lastToken !== '' ? lastToken : '0');
+
+      expressionParts.forEach((token) => {
+        if (!Number.isNaN(parseFloat(token))) {
+          outputQueue += `${parseFloat(token)} `;
+        } else if (operatorKeys.includes(token)) {
+          while (operatorStack.length > 0) {
+            const top = operatorStack[operatorStack.length - 1];
+            if ((operators[token].associativity === 'Left' && operators[token].precedence <= operators[top].precedence)
+              || (operators[token].associativity === 'Right' && operators[token].precedence < operators[top].precedence)) {
+              outputQueue += `${operatorStack.pop()} `;
+            } else {
+              break;
+            }
+          }
+          operatorStack.push(token);
+        } else if (token !== '') {
+          outputQueue += '0 ';
+        }
+      });
+
+      while (operatorStack.length > 0) {
+        outputQueue += `${operatorStack.pop()} `;
+      }
+
+      return outputQueue.trim();
+    }
+
+    function agentCbsCalculateRpn(expression) {
+      const stack = [];
+      String(expression || '').split(' ').filter(Boolean).forEach((token) => {
+        if (!Number.isNaN(parseFloat(token))) {
+          stack.push(parseFloat(token));
+          return;
+        }
+
+        const b = stack.pop() ?? 0;
+        const a = stack.pop() ?? 0;
+        switch (token) {
+          case '+': stack.push(a + b); break;
+          case '-': stack.push(a - b); break;
+          case '*': stack.push(a * b); break;
+          case '/': stack.push(a / b); break;
+          case '^': stack.push(a ** b); break;
+          case '%': stack.push(a % b); break;
+          case '<': stack.push(a < b ? 1 : 0); break;
+          case '>': stack.push(a > b ? 1 : 0); break;
+          case '|': stack.push(a || b); break;
+          case '&': stack.push(a && b); break;
+          case '≤': stack.push(a <= b ? 1 : 0); break;
+          case '≥': stack.push(a >= b ? 1 : 0); break;
+          case '=': stack.push(a === b ? 1 : 0); break;
+          case '≠': stack.push(a !== b ? 1 : 0); break;
+          case '!': stack.push(b ? 0 : 1); break;
+          default: stack.push(0); break;
+        }
+      });
+
+      if (!stack.length) return 0;
+      const value = stack.pop();
+      return Number.isFinite(Number(value)) ? Number(value) : 0;
+    }
+
     function hashAgentCbsContext(cbsContext) {
       const hasher = createTextHasher()
         .update('agent-cbs')
@@ -1184,6 +1331,7 @@
         });
       };
       appendObject('chatVars', cbsContext?.chatVars);
+      appendObject('globalVars', cbsContext?.globalVars);
       appendObject('defaultVars', cbsContext?.defaultVars);
       return hasher.digest();
     }
@@ -1337,7 +1485,7 @@
       if (raw === '/') return true;
       if (!String(raw || '').startsWith('/')) return false;
       const normalized = normalizeAgentCbsName(String(raw || '').replace(/^\//, ''));
-      return raw === '/' || normalized === 'if' || normalized === 'when';
+      return normalized === 'if' || normalized === 'ifpure' || normalized === 'when';
     }
 
     function agentCbsBlockStartMatcher(rawHeader, state) {
@@ -1504,6 +1652,11 @@
 
     function agentCbsMatcher(rawContent, cbsContext, state) {
       const content = String(rawContent || '');
+      if (content.startsWith('?')) {
+        const expression = content.slice(1).trim();
+        if (expression) return agentCbsCalcString(expression, cbsContext).toString();
+      }
+
       const colonIndex = content.indexOf(':');
       const parts = colonIndex !== -1 && content[colonIndex + 1] === ':'
         ? content.split('::')
@@ -1519,6 +1672,10 @@
           return cbsContext?.userName || 'User';
         case 'getvar':
           return readAgentCbsVar(args[0], cbsContext);
+        case 'getglobalvar':
+          return readAgentCbsGlobalVar(args[0], cbsContext);
+        case 'calc':
+          return agentCbsCalcString(args[0] || '', cbsContext).toString();
         case 'equal':
           return args[0] === args[1] ? '1' : '0';
         case 'notequal':
@@ -1685,7 +1842,7 @@
         recordAgentCbsWarning(state, `non-deterministic CBS preserved: {{${summarizeAgentCbsTag(rawContent)}}}`);
         return;
       }
-      if (['setvar', 'addvar', 'setdefaultvar'].includes(name)) {
+      if (['setvar', 'addvar', 'setdefaultvar', 'setglobalvar', 'addglobalvar', 'setdefaultglobalvar'].includes(name)) {
         recordAgentCbsWarning(state, `state-changing CBS preserved: {{${summarizeAgentCbsTag(rawContent)}}}`);
         return;
       }
@@ -1709,7 +1866,7 @@
 
     function isAgentCbsSupportedFunction(name) {
       return [
-        'char', 'bot', 'user', 'getvar',
+        'char', 'bot', 'user', 'getvar', 'getglobalvar', 'calc',
         'equal', 'notequal', 'greater', 'less', 'greaterequal', 'lessequal',
         'contains', 'startswith', 'endswith', 'trim', 'lower', 'upper', 'length',
         'blank', 'none', 'br', 'newline', 'bo', 'bc', 'ddecbo', 'ddecbc', 'decbo', 'decbc',
