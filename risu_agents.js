@@ -60,6 +60,11 @@
     const RUN_LOG_BODY_PREVIEW_CHARS = 700;
     const PRE_REUSE_VERSION = 3;
     const PLUGIN_CHAT_ID_FIELD = 'risuAgentsChatId';
+    const AGENT_CBS_MAX_PASSES = 32;
+    const AGENT_CBS_MAX_BLOCKS = 128;
+    const AGENT_CBS_MAX_WARNINGS = 40;
+    const AGENT_CBS_LITERAL_PREFIX = '\u0000AGENT_CBS_LITERAL_';
+    const AGENT_CBS_LITERAL_SUFFIX = '_END\u0000';
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
@@ -706,6 +711,12 @@
         loreCandidates,
         loreStats: loreMatch.stats,
       });
+      const cbsContext = buildAgentCbsContext({
+        character: sources.character,
+        db: sources.db,
+        currentChatContext,
+        chatContext,
+      });
       const historyCache = new Map();
       return {
         ...sources,
@@ -715,6 +726,7 @@
         activeLorebooks: loreMatch.activeLorebooks,
         loreStats: loreMatch.stats,
         settingBlocks,
+        cbsContext,
         currentChatContext,
         historyForWindow(windowSize) {
           const key = Math.max(1, parseInt(windowSize, 10) || maxWindow);
@@ -1074,6 +1086,661 @@
         result = result.replace(/\{\{char\}\}/gi, characterName);
       }
       return result.replace(/\{\{user\}\}/gi, placeholderContext?.userName || 'User');
+    }
+
+    function buildAgentCbsContext(options = {}) {
+      const character = options.character || null;
+      const db = options.db || null;
+      const chat = options.currentChatContext?.chat || getCurrentCharacterChat(character);
+      const rawMessages = Array.isArray(chat?.message) ? chat.message : null;
+      const fallbackMessageCount = options.chatContext?.messageCount
+        ?? (Array.isArray(options.chatContext?.messages) ? options.chatContext.messages.length : 0);
+      const messageCount = rawMessages
+        ? rawMessages.length
+        : Math.max(0, parseInt(fallbackMessageCount, 10) || 0);
+      const user = resolveAgentCbsUserName(db, chat);
+
+      return {
+        characterName: firstNonEmpty(character?.nickname, character?.name),
+        userName: user.name,
+        userSource: user.source,
+        chatVars: normalizeAgentCbsChatVars(chat?.scriptstate),
+        defaultVars: parseAgentCbsDefaultVariables(character?.defaultVariables),
+        randomSeedText: `${String(character?.chaId ?? '')}${String(chat?.id ?? '')}`,
+        randomMessageCount: messageCount,
+        characterId: String(character?.chaId ?? ''),
+        chatId: String(chat?.id ?? ''),
+      };
+    }
+
+    function resolveAgentCbsUserName(db, chat) {
+      const personas = Array.isArray(db?.personas) ? db.personas : [];
+      const bindedPersona = String(chat?.bindedPersona || '').trim();
+      if (bindedPersona && personas.length) {
+        const persona = personas.find(item => item?.id === bindedPersona || item?.name === bindedPersona);
+        const personaName = String(persona?.name || '').trim();
+        if (personaName) return { name: personaName, source: 'chat.bindedPersona' };
+      }
+
+      const selectedPersona = getSelectedPersona(db);
+      const selectedName = String(selectedPersona?.name || '').trim();
+      if (selectedName) return { name: selectedName, source: 'selectedPersona' };
+
+      return { name: 'User', source: bindedPersona ? 'persona-not-found:User' : 'fallback:User' };
+    }
+
+    function normalizeAgentCbsChatVars(scriptstate) {
+      const vars = {};
+      if (!scriptstate || typeof scriptstate !== 'object') return vars;
+      Object.entries(scriptstate).forEach(([key, value]) => {
+        if (value === undefined || value === null) return;
+        vars[String(key)] = String(value);
+      });
+      return vars;
+    }
+
+    function parseAgentCbsDefaultVariables(template) {
+      const vars = {};
+      try {
+        if (!template) return vars;
+        String(template).split('\n').forEach((line) => {
+          const [key, value] = line.split('=');
+          if (key && value) vars[key] = value;
+        });
+      } catch (err) {
+        // Ignore malformed default variable templates. Missing vars resolve to null.
+      }
+      return vars;
+    }
+
+    function readAgentCbsVar(name, cbsContext) {
+      const rawName = String(name || '').trim();
+      if (!rawName) return 'null';
+      const bareName = rawName.startsWith('$') ? rawName.slice(1) : rawName;
+      const chatVars = cbsContext?.chatVars || {};
+      const defaultVars = cbsContext?.defaultVars || {};
+      const keys = [rawName, `$${bareName}`, bareName];
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(chatVars, key)) return String(chatVars[key]);
+      }
+      for (const key of [bareName, rawName]) {
+        if (Object.prototype.hasOwnProperty.call(defaultVars, key)) return String(defaultVars[key]);
+      }
+      return 'null';
+    }
+
+    function hashAgentCbsContext(cbsContext) {
+      const hasher = createTextHasher()
+        .update('agent-cbs')
+        .update(cbsContext?.characterName || '')
+        .update(cbsContext?.userName || '')
+        .update(cbsContext?.randomSeedText || '')
+        .update(cbsContext?.randomMessageCount ?? 0);
+      const appendObject = (label, value) => {
+        const entries = Object.entries(value || {}).sort((a, b) => a[0].localeCompare(b[0]));
+        hasher.update(label).update(entries.length);
+        entries.forEach(([key, entryValue]) => {
+          hasher.update(key).update(entryValue);
+        });
+      };
+      appendObject('chatVars', cbsContext?.chatVars);
+      appendObject('defaultVars', cbsContext?.defaultVars);
+      return hasher.digest();
+    }
+
+    function formatPromptForRunLog(messages) {
+      return (Array.isArray(messages) ? messages : [])
+        .map((message, idx) => `[${idx}] ${message?.role || '(none)'}\n${String(message?.content ?? '')}`)
+        .join('\n\n');
+    }
+
+    function renderAgentCbsMessages(messages, cbsContext, options = {}) {
+      const state = createAgentCbsRenderState(options);
+      const rendered = (Array.isArray(messages) ? messages : []).map((message) => {
+        const original = String(message?.content ?? '');
+        const content = renderAgentCbsText(original, cbsContext, state, 0);
+        if (content !== original) state.applied = true;
+        return content === original ? message : { ...message, content };
+      });
+      if (options.debugLog && state.warnings.length) {
+        console.log(`Agents! CBS warnings${options.label ? ` (${options.label})` : ''}: ${state.warnings.join('; ')}`);
+      }
+      return {
+        messages: rendered,
+        warnings: state.warnings.slice(),
+        applied: state.applied,
+      };
+    }
+
+    function createAgentCbsRenderState(options = {}) {
+      return {
+        warnings: [],
+        warningSet: new Set(),
+        applied: false,
+        literals: [],
+        label: options.label || '',
+      };
+    }
+
+    function renderAgentCbsText(text, cbsContext, state, depth = 0) {
+      let current = String(text ?? '');
+      if (!current.includes('{{')) {
+        return depth === 0 ? restoreAgentCbsLiterals(current, state) : current;
+      }
+
+      for (let pass = 0; pass < AGENT_CBS_MAX_PASSES; pass += 1) {
+        const before = current;
+        let blockCount = 0;
+        let blockMatch = findInnermostAgentCbsBlock(current, cbsContext, state, depth);
+        while (blockMatch && blockCount < AGENT_CBS_MAX_BLOCKS) {
+          const replacement = renderAgentCbsBlock(blockMatch, cbsContext, state, depth);
+          current = `${current.slice(0, blockMatch.start.tag.start)}${replacement}${current.slice(blockMatch.end.tag.end)}`;
+          state.applied = true;
+          blockCount += 1;
+          blockMatch = findInnermostAgentCbsBlock(current, cbsContext, state, depth);
+        }
+
+        const simpleResult = replaceAgentCbsSimpleTagsOnce(current, cbsContext, state, depth);
+        current = simpleResult.text;
+        if (current === before) break;
+      }
+
+      warnUnresolvedAgentCbs(current, state);
+      return depth === 0 ? restoreAgentCbsLiterals(current, state) : current;
+    }
+
+    function findAgentCbsTags(text) {
+      const tags = [];
+      const source = String(text || '');
+      let idx = 0;
+      while (idx < source.length) {
+        const start = source.indexOf('{{', idx);
+        if (start === -1) break;
+        let pointer = start + 2;
+        let depth = 1;
+        while (pointer < source.length) {
+          if (source.startsWith('{{', pointer)) {
+            depth += 1;
+            pointer += 2;
+            continue;
+          }
+          if (source.startsWith('}}', pointer)) {
+            depth -= 1;
+            if (depth === 0) {
+              const end = pointer + 2;
+              tags.push({
+                start,
+                end,
+                contentStart: start + 2,
+                contentEnd: pointer,
+                content: source.slice(start + 2, pointer),
+              });
+              idx = end;
+              break;
+            }
+            pointer += 2;
+            continue;
+          }
+          pointer += 1;
+        }
+        if (depth !== 0) break;
+      }
+      return tags;
+    }
+
+    function findInnermostAgentCbsBlock(text, cbsContext, state, depth) {
+      const stack = [];
+      const tags = findAgentCbsTags(text);
+      for (const tag of tags) {
+        const raw = String(tag.content || '').trim();
+        if (!raw || raw === ':else') continue;
+
+        if (raw.startsWith('#')) {
+          const renderedHeader = renderAgentCbsText(tag.content, cbsContext, state, depth + 1).trim();
+          const block = agentCbsBlockStartMatcher(renderedHeader, state);
+          if (block) stack.push({ tag, block });
+          continue;
+        }
+
+        if (isAgentCbsCloseTag(raw) && stack.length) {
+          return { start: stack.pop(), end: { tag }, source: text };
+        }
+      }
+      return null;
+    }
+
+    function replaceAgentCbsSimpleTagsOnce(text, cbsContext, state, depth) {
+      const tags = findAgentCbsTags(text);
+      let result = String(text || '');
+      let changed = false;
+      for (let idx = tags.length - 1; idx >= 0; idx -= 1) {
+        const tag = tags[idx];
+        const raw = String(tag.content || '').trim();
+        if (isAgentCbsBlockBoundary(raw)) continue;
+
+        const renderedContent = renderAgentCbsText(tag.content, cbsContext, state, depth + 1);
+        const replacement = agentCbsMatcher(renderedContent, cbsContext, state);
+        if (replacement !== null) {
+          result = `${result.slice(0, tag.start)}${replacement}${result.slice(tag.end)}`;
+          state.applied = true;
+          changed = true;
+        }
+      }
+      return { text: result, changed };
+    }
+
+    function isAgentCbsBlockBoundary(raw) {
+      return raw === ':else' || raw.startsWith('#') || raw.startsWith('/');
+    }
+
+    function isAgentCbsCloseTag(raw) {
+      if (raw === '/') return true;
+      if (!String(raw || '').startsWith('/')) return false;
+      const normalized = normalizeAgentCbsName(String(raw || '').replace(/^\//, ''));
+      return raw === '/' || normalized === 'if' || normalized === 'when';
+    }
+
+    function agentCbsBlockStartMatcher(rawHeader, state) {
+      const header = String(rawHeader || '').trim();
+      if (header.startsWith('#if_pure')) {
+        return agentCbsTruthy(extractAgentCbsBlockState(header, '#if_pure'))
+          ? { type: 'ifpure' }
+          : { type: 'ignore' };
+      }
+
+      if (header.startsWith('#if')) {
+        return agentCbsTruthy(extractAgentCbsBlockState(header, '#if'))
+          ? { type: 'parse' }
+          : { type: 'ignore' };
+      }
+
+      if (!header.startsWith('#when')) return null;
+
+      if (header.startsWith('#when ')) {
+        return agentCbsTruthy(header.split(' ', 2)[1])
+          ? { type: 'newif' }
+          : { type: 'newif-falsy' };
+      }
+
+      if (!header.startsWith('#when::')) {
+        return { type: 'newif-falsy' };
+      }
+
+      const statement = header.split('::').slice(1);
+      if (statement.length === 1) {
+        return agentCbsTruthy(statement[0]) ? { type: 'newif' } : { type: 'newif-falsy' };
+      }
+
+      let mode = 'normal';
+      while (statement.length > 1) {
+        const condition = statement.pop();
+        const operator = normalizeAgentCbsName(statement.pop());
+        switch (operator) {
+          case 'not':
+            statement.push(agentCbsTruthy(condition) ? '0' : '1');
+            break;
+          case 'keep':
+            mode = 'keep';
+            statement.push(condition);
+            break;
+          case 'legacy':
+            mode = 'legacy';
+            statement.push(condition);
+            break;
+          case 'and': {
+            const condition2 = statement.pop();
+            statement.push(agentCbsTruthy(condition) && agentCbsTruthy(condition2) ? '1' : '0');
+            break;
+          }
+          case 'or': {
+            const condition2 = statement.pop();
+            statement.push(agentCbsTruthy(condition) || agentCbsTruthy(condition2) ? '1' : '0');
+            break;
+          }
+          case 'is': {
+            const condition2 = statement.pop();
+            statement.push(condition === condition2 ? '1' : '0');
+            break;
+          }
+          case 'isnot': {
+            const condition2 = statement.pop();
+            statement.push(condition !== condition2 ? '1' : '0');
+            break;
+          }
+          case '>': {
+            const condition2 = statement.pop();
+            statement.push(parseFloat(condition2) > parseFloat(condition) ? '1' : '0');
+            break;
+          }
+          case '<': {
+            const condition2 = statement.pop();
+            statement.push(parseFloat(condition2) < parseFloat(condition) ? '1' : '0');
+            break;
+          }
+          case '>=': {
+            const condition2 = statement.pop();
+            statement.push(parseFloat(condition2) >= parseFloat(condition) ? '1' : '0');
+            break;
+          }
+          case '<=': {
+            const condition2 = statement.pop();
+            statement.push(parseFloat(condition2) <= parseFloat(condition) ? '1' : '0');
+            break;
+          }
+          default:
+            recordAgentCbsWarning(state, `unsupported CBS condition operator preserved: ${operator || '(empty)'}`);
+            return null;
+        }
+      }
+
+      const truthy = agentCbsTruthy(statement[0]);
+      if (mode === 'legacy') return truthy ? { type: 'parse' } : { type: 'ignore' };
+      return {
+        type: truthy ? 'newif' : 'newif-falsy',
+        type2: mode === 'keep' ? 'keep' : '',
+      };
+    }
+
+    function extractAgentCbsBlockState(header, prefix) {
+      const rest = String(header || '').slice(prefix.length).trim();
+      if (rest.startsWith('::')) return rest.slice(2);
+      return rest.split(' ', 1)[0] || '';
+    }
+
+    function renderAgentCbsBlock(match, cbsContext, state, depth) {
+      const body = match?.source
+        ? String(match.source).slice(match.start.tag.end, match.end.tag.start)
+        : '';
+      const block = match.start.block;
+      switch (block.type) {
+        case 'ignore':
+          return '';
+        case 'parse':
+          return renderAgentCbsText(agentCbsTrimLines(body.trim()), cbsContext, state, depth + 1);
+        case 'ifpure':
+          return storeAgentCbsLiteral(state, body);
+        case 'newif':
+        case 'newif-falsy':
+          return renderAgentCbsText(selectAgentCbsWhenBranch(body, block), cbsContext, state, depth + 1);
+        default:
+          return '';
+      }
+    }
+
+    function selectAgentCbsWhenBranch(body, block) {
+      const text = String(body || '');
+      const truthy = block.type === 'newif';
+      const lines = text.split('\n');
+
+      if (lines.length === 1) {
+        const elseIndex = text.indexOf('{{:else}}');
+        if (elseIndex !== -1) {
+          return truthy ? text.slice(0, elseIndex) : text.slice(elseIndex + '{{:else}}'.length);
+        }
+        return truthy ? text : '';
+      }
+
+      const selected = lines.slice();
+      const elseLine = selected.findIndex(line => line.trim() === '{{:else}}');
+      if (elseLine !== -1 && truthy) {
+        selected.splice(elseLine);
+      } else if (elseLine !== -1 && !truthy) {
+        selected.splice(0, elseLine + 1);
+      } else if (elseLine === -1 && !truthy) {
+        return '';
+      }
+
+      if (block.type2 !== 'keep') {
+        while (selected.length > 0 && selected[0].trim() === '') selected.shift();
+        while (selected.length > 0 && selected[selected.length - 1].trim() === '') selected.pop();
+      }
+
+      return selected.join('\n');
+    }
+
+    function agentCbsTrimLines(text) {
+      return String(text || '').split('\n').map(line => line.trimStart()).join('\n').trim();
+    }
+
+    function agentCbsMatcher(rawContent, cbsContext, state) {
+      const content = String(rawContent || '');
+      const colonIndex = content.indexOf(':');
+      const parts = colonIndex !== -1 && content[colonIndex + 1] === ':'
+        ? content.split('::')
+        : content.split(':');
+      const name = normalizeAgentCbsName(parts[0]);
+      const args = parts.slice(1).map(arg => String(arg ?? ''));
+
+      switch (name) {
+        case 'char':
+        case 'bot':
+          return cbsContext?.characterName || '';
+        case 'user':
+          return cbsContext?.userName || 'User';
+        case 'getvar':
+          return readAgentCbsVar(args[0], cbsContext);
+        case 'equal':
+          return args[0] === args[1] ? '1' : '0';
+        case 'notequal':
+          return args[0] !== args[1] ? '1' : '0';
+        case 'greater':
+          return Number(args[0]) > Number(args[1]) ? '1' : '0';
+        case 'less':
+          return Number(args[0]) < Number(args[1]) ? '1' : '0';
+        case 'greaterequal':
+          return Number(args[0]) >= Number(args[1]) ? '1' : '0';
+        case 'lessequal':
+          return Number(args[0]) <= Number(args[1]) ? '1' : '0';
+        case 'contains':
+          return String(args[0] || '').includes(String(args[1] || '')) ? '1' : '0';
+        case 'startswith':
+          return String(args[0] || '').startsWith(String(args[1] || '')) ? '1' : '0';
+        case 'endswith':
+          return String(args[0] || '').endsWith(String(args[1] || '')) ? '1' : '0';
+        case 'trim':
+          return String(args[0] || '').trim();
+        case 'lower':
+          return String(args[0] || '').toLocaleLowerCase();
+        case 'upper':
+          return String(args[0] || '').toLocaleUpperCase();
+        case 'length':
+          return String(args[0] || '').length.toString();
+        case 'blank':
+        case 'none':
+          return '';
+        case 'br':
+        case 'newline':
+          return '\n';
+        case 'bo':
+        case 'ddecbo':
+          return storeAgentCbsLiteral(state, '{{');
+        case 'bc':
+        case 'ddecbc':
+          return storeAgentCbsLiteral(state, '}}');
+        case 'decbo':
+          return '{';
+        case 'decbc':
+          return '}';
+        case 'pick':
+          return agentCbsRandomPick(args, agentCbsPickHashRand(cbsContext?.randomMessageCount || 0, cbsContext?.randomSeedText || ''));
+        case 'rollp':
+        case 'rollpick':
+          return agentCbsRollPick(args, cbsContext);
+        case 'and':
+          return args[0] === '1' && args[1] === '1' ? '1' : '0';
+        case 'or':
+          return args[0] === '1' || args[1] === '1' ? '1' : '0';
+        case 'not':
+          return args[0] === '1' ? '0' : '1';
+        default:
+          if (name) recordAgentCbsUnsupportedWarning(name, content, state);
+          return null;
+      }
+    }
+
+    function agentCbsRandomPick(args, rand) {
+      if (!args.length) return String(rand);
+      let arr = [];
+      if (args.length === 1) {
+        const arg = String(args[0] || '');
+        if (arg.startsWith('[') && arg.endsWith(']')) {
+          arr = parseAgentCbsArray(arg);
+        } else {
+          arr = arg.replace(/\\,/g, '§X').split(/\:|\,/g);
+        }
+      } else {
+        arr = args;
+      }
+      if (!arr.length) return '';
+      const index = Math.min(arr.length - 1, Math.max(0, Math.floor(rand * arr.length)));
+      const element = arr[index];
+      return typeof element === 'string' ? element.replace(/§X/g, ',') : JSON.stringify(element) ?? '';
+    }
+
+    function parseAgentCbsArray(value) {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : String(value || '').split('§');
+      } catch (err) {
+        return String(value || '').split('§');
+      }
+    }
+
+    function agentCbsRollPick(args, cbsContext) {
+      if (!args.length) return '1';
+      const notation = String(args[0] || '').split('d');
+      let num = 1;
+      let sides = 6;
+      if (notation.length === 2) {
+        num = Number(notation[0] || 1);
+        sides = Number(notation[1] || 6);
+      } else if (notation.length === 1) {
+        sides = Number(notation[0]);
+      }
+      if (Number.isNaN(num) || Number.isNaN(sides) || num < 1 || sides < 1) return 'NaN';
+
+      let total = 0;
+      const baseMessageCount = cbsContext?.randomMessageCount || 0;
+      const seedText = cbsContext?.randomSeedText || '';
+      for (let idx = 0; idx < num; idx += 1) {
+        total += Math.floor(agentCbsPickHashRand(baseMessageCount + (idx * 15), seedText) * sides) + 1;
+      }
+      return total.toString();
+    }
+
+    function agentCbsPickHashRand(cid, word) {
+      let hashAddress = 5515;
+      const rand = (value) => {
+        const text = String(value || '');
+        for (let counter = 0; counter < text.length; counter += 1) {
+          hashAddress = ((hashAddress << 5) + hashAddress) + text.charCodeAt(counter);
+        }
+        return hashAddress;
+      };
+      const randF = agentCbsSfc32(rand(word), rand(word), rand(word), rand(word));
+      const v = Math.max(0, parseInt(cid, 10) || 0) % 1000;
+      for (let idx = 0; idx < v; idx += 1) randF();
+      return randF();
+    }
+
+    function agentCbsSfc32(a, b, c, d) {
+      return function nextRand() {
+        a |= 0; b |= 0; c |= 0; d |= 0;
+        const t = (((a + b) | 0) + d) | 0;
+        d = (d + 1) | 0;
+        a = b ^ (b >>> 9);
+        b = (c + (c << 3)) | 0;
+        c = ((c << 21) | (c >>> 11));
+        c = (c + t) | 0;
+        return (t >>> 0) / 4294967296;
+      };
+    }
+
+    function agentCbsTruthy(value) {
+      return value === 'true' || value === '1';
+    }
+
+    function normalizeAgentCbsName(value) {
+      return String(value || '').toLocaleLowerCase().replace(/[\s_-]/g, '');
+    }
+
+    function storeAgentCbsLiteral(state, text) {
+      const idx = state.literals.length;
+      const token = `${AGENT_CBS_LITERAL_PREFIX}${idx}${AGENT_CBS_LITERAL_SUFFIX}`;
+      state.literals.push(String(text ?? ''));
+      return token;
+    }
+
+    function restoreAgentCbsLiterals(text, state) {
+      let result = String(text ?? '');
+      if (!state?.literals?.length) return result;
+      state.literals.forEach((literal, idx) => {
+        result = result.split(`${AGENT_CBS_LITERAL_PREFIX}${idx}${AGENT_CBS_LITERAL_SUFFIX}`).join(literal);
+      });
+      return result;
+    }
+
+    function recordAgentCbsUnsupportedWarning(name, rawContent, state) {
+      if (['random', 'roll', 'dice', 'randint'].includes(name)) {
+        recordAgentCbsWarning(state, `non-deterministic CBS preserved: {{${summarizeAgentCbsTag(rawContent)}}}`);
+        return;
+      }
+      if (['setvar', 'addvar', 'setdefaultvar'].includes(name)) {
+        recordAgentCbsWarning(state, `state-changing CBS preserved: {{${summarizeAgentCbsTag(rawContent)}}}`);
+        return;
+      }
+      recordAgentCbsWarning(state, `unsupported CBS preserved: {{${summarizeAgentCbsTag(rawContent)}}}`);
+    }
+
+    function warnUnresolvedAgentCbs(text, state) {
+      findAgentCbsTags(text).forEach((tag) => {
+        const raw = String(tag.content || '').trim();
+        if (!raw || raw === ':else' || raw.startsWith('/')) return;
+        if (raw.startsWith('#')) {
+          recordAgentCbsWarning(state, `unresolved CBS block preserved: {{${summarizeAgentCbsTag(raw)}}}`);
+          return;
+        }
+        const name = normalizeAgentCbsName(raw.split(raw.includes('::') ? '::' : ':')[0]);
+        if (name && !isAgentCbsSupportedFunction(name)) {
+          recordAgentCbsUnsupportedWarning(name, raw, state);
+        }
+      });
+    }
+
+    function isAgentCbsSupportedFunction(name) {
+      return [
+        'char', 'bot', 'user', 'getvar',
+        'equal', 'notequal', 'greater', 'less', 'greaterequal', 'lessequal',
+        'contains', 'startswith', 'endswith', 'trim', 'lower', 'upper', 'length',
+        'blank', 'none', 'br', 'newline', 'bo', 'bc', 'ddecbo', 'ddecbc', 'decbo', 'decbc',
+        'pick', 'rollp', 'rollpick', 'and', 'or', 'not',
+      ].includes(name);
+    }
+
+    function recordAgentCbsWarning(state, warning) {
+      if (!state || !warning) return;
+      if (state.warningSet.has(warning)) return;
+      state.warningSet.add(warning);
+      if (state.warnings.length < AGENT_CBS_MAX_WARNINGS) {
+        state.warnings.push(warning);
+      }
+    }
+
+    function summarizeAgentCbsTag(rawContent) {
+      const text = String(rawContent || '').replace(/\s+/g, ' ').trim();
+      return text.length > 90 ? `${text.slice(0, 87)}...` : text;
+    }
+
+    function mergeAgentCbsWarnings(...warningLists) {
+      const seen = new Set();
+      const merged = [];
+      warningLists.flat().forEach((warning) => {
+        const text = String(warning || '').trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        if (merged.length < AGENT_CBS_MAX_WARNINGS) merged.push(text);
+      });
+      return merged;
     }
 
     async function loadActualChatContext(_requestMessages, debugLog) {
@@ -2754,6 +3421,8 @@
         userInput: '',
         settingBlocks: '',
         settingBlockStats: null,
+        cbsContextHash: '',
+        cbsWarnings: [],
         preReuseVersion: PRE_REUSE_VERSION,
         preReuseKey: '',
         preReused: false,
@@ -2780,7 +3449,7 @@
       };
     }
 
-    function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf) {
+    function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf, cbsContext = null) {
       if (chatContext?.available !== true || !scope?.chatKey) return '';
       const contextMessages = Array.isArray(chatContext.messages) ? chatContext.messages : [];
       const messageCount = chatContext.messageCount ?? contextMessages.length;
@@ -2789,6 +3458,7 @@
       const recentHistoryHash = hashRecentMessages(contextMessages, maxHistoryWindow);
       const settingBlocksHash = hashTextBlock(settingBlocks?.content || '');
       const preAgentsHash = hashPreAgentConfig(pipeline, conf);
+      const cbsContextHash = hashAgentCbsContext(cbsContext);
       const keyHash = createTextHasher()
         .update('version').update(PRE_REUSE_VERSION)
         .update('chatKey').update(scope.chatKey)
@@ -2796,6 +3466,7 @@
         .update('currentUserHash').update(currentUserHash)
         .update('recentHistoryHash').update(recentHistoryHash)
         .update('settingBlocksHash').update(settingBlocksHash)
+        .update('cbsContextHash').update(cbsContextHash)
         .update('preAgentsHash').update(preAgentsHash)
         .digest();
       return `v${PRE_REUSE_VERSION}:${keyHash}:${messageCount}:${maxHistoryWindow}`;
@@ -2985,6 +3656,7 @@
         postResults: Array.isArray(run.postResults) ? run.postResults.map(result => ({ ...result })) : [],
         notes: Array.isArray(run.notes) ? run.notes.map(note => ({ ...note })) : [],
       };
+      delete compacted.cbsContext;
       const updatedAt = run.updatedAt || Date.now();
 
       await compactRunLogTextField(compacted, 'settingBlocks', run, 'settingBlocks', updatedAt, debugLog);
@@ -2994,6 +3666,7 @@
         const result = compacted.preResults[idx];
         await compactRunLogTextField(result, 'content', run, `preResults.${idx}.content`, updatedAt, debugLog);
         await compactRunLogTextField(result, 'rawOutput', run, `preResults.${idx}.rawOutput`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'prompt', run, `preResults.${idx}.prompt`, updatedAt, debugLog);
         await compactRunLogTextField(result, 'memoryPrevious', run, `preResults.${idx}.memoryPrevious`, updatedAt, debugLog);
         await compactRunLogTextField(result, 'memoryUpdate', run, `preResults.${idx}.memoryUpdate`, updatedAt, debugLog);
       }
@@ -3003,6 +3676,7 @@
         await compactRunLogTextField(result, 'inputResponse', run, `postResults.${idx}.inputResponse`, updatedAt, debugLog);
         await compactRunLogTextField(result, 'outputResponse', run, `postResults.${idx}.outputResponse`, updatedAt, debugLog);
         await compactRunLogTextField(result, 'rawOutput', run, `postResults.${idx}.rawOutput`, updatedAt, debugLog);
+        await compactRunLogTextField(result, 'prompt', run, `postResults.${idx}.prompt`, updatedAt, debugLog);
       }
 
       return compacted;
@@ -3146,6 +3820,9 @@
         ? chatContext?.error || 'chat-context-unavailable'
         : memoryScope?.chatScopeError || 'chat-scope-unavailable';
       const keepRunDetails = isRunLogEnabled(conf);
+      const cbsContext = runContext?.cbsContext || null;
+      const cbsContextHash = hashAgentCbsContext(cbsContext);
+      const runCbsWarnings = [];
       const notes = [];
       const userInput = getUserInput(contextMessages);
       const preResults = [];
@@ -3185,6 +3862,9 @@
           pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
           settingBlocks: settingBlocks.content,
           settingBlockStats: settingBlocks.stats,
+          cbsContext,
+          cbsContextHash,
+          cbsWarnings: [],
           preReuseVersion: PRE_REUSE_VERSION,
           preReuseKey,
           preReused: false,
@@ -3238,13 +3918,26 @@
           const agentMemory = memoryCanWrite
             ? await loadAgentMemory(agent, memoryScope, contextMessages, conf.debugLog)
             : await loadAgentMemoryReadOnly(agent, memoryScope, conf.debugLog, memoryUnavailableReason);
-          const prompt = buildAgentPrompt(agent, {
+          const rawPrompt = buildAgentPrompt(agent, {
             settingBlocks: settingBlocks.content,
             history,
             userInput,
             notes,
             agentMemory: agentMemory.value || EMPTY_AGENT_MEMORY,
           });
+          const cbsRender = renderAgentCbsMessages(rawPrompt, cbsContext, {
+            debugLog: conf.debugLog,
+            label: `Row ${row + 1} ${agent.name}`,
+          });
+          const prompt = cbsRender.messages;
+          runCbsWarnings.push(...cbsRender.warnings);
+          const promptLogFields = keepRunDetails
+            ? {
+              prompt: formatPromptForRunLog(prompt),
+              cbsWarnings: cbsRender.warnings,
+              cbsApplied: cbsRender.applied,
+            }
+            : {};
 
           if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} prompt`, prompt, true);
 
@@ -3271,6 +3964,7 @@
                   content: parsed.note || content,
                   ...(keepRunDetails ? {
                     rawOutput: content,
+                    ...promptLogFields,
                     memoryPrevious: agentMemory.value || '',
                     memoryUpdate: parsed.memoryUpdate,
                   } : {}),
@@ -3288,6 +3982,7 @@
                 content,
                 ...(keepRunDetails ? {
                   rawOutput: content,
+                  ...promptLogFields,
                   memoryPrevious: agentMemory.value || '',
                   memoryUpdate: '',
                 } : {}),
@@ -3302,7 +3997,7 @@
             return {
               ...runAgentMeta(agent, conf),
               content,
-              ...(keepRunDetails ? { rawOutput: content } : {}),
+              ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
               status: 'success',
               memoryStatus: 'disabled',
             };
@@ -3312,7 +4007,7 @@
             return {
               ...runAgentMeta(agent, conf),
               content,
-              ...(keepRunDetails ? { rawOutput: content } : {}),
+              ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
               status: 'failed',
               failed: true,
               error: err.message,
@@ -3351,6 +4046,9 @@
         pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
+        cbsContext,
+        cbsContextHash,
+        cbsWarnings: mergeAgentCbsWarnings(runCbsWarnings),
         preReuseVersion: PRE_REUSE_VERSION,
         preReuseKey,
         preReused: false,
@@ -3385,6 +4083,9 @@
         notes: [],
       };
       const postResults = Array.isArray(previousRun.postResults) ? previousRun.postResults : [];
+      const cbsContext = previousRun.cbsContext || lastPipelineRun?.cbsContext || null;
+      const cbsContextHash = hashAgentCbsContext(cbsContext);
+      const runCbsWarnings = Array.isArray(previousRun.cbsWarnings) ? previousRun.cbsWarnings.slice() : [];
 
       for (let row = MAIN_ROW_INDEX + 1; row < PIPELINE_ROW_COUNT; row += 1) {
         const agent = getEnabledAgentsForRow(pipeline, row)[0];
@@ -3419,11 +4120,24 @@
           }
           continue;
         }
-        const prompt = buildAgentPrompt(agent, {
+        const rawPrompt = buildAgentPrompt(agent, {
           settingBlocks: previousRun.settingBlocks,
           notes: previousRun.notes,
           currentResponse,
         });
+        const cbsRender = renderAgentCbsMessages(rawPrompt, cbsContext, {
+          debugLog: conf.debugLog,
+          label: `Row ${row + 1} ${agent.name} post-agent`,
+        });
+        const prompt = cbsRender.messages;
+        runCbsWarnings.push(...cbsRender.warnings);
+        const promptLogFields = keepRunDetails
+          ? {
+            prompt: formatPromptForRunLog(prompt),
+            cbsWarnings: cbsRender.warnings,
+            cbsApplied: cbsRender.applied,
+          }
+          : {};
 
         if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
 
@@ -3438,6 +4152,7 @@
                 inputResponse: currentResponse,
                 outputResponse: nextResponse,
                 rawOutput,
+                ...promptLogFields,
               });
             }
             currentResponse = nextResponse;
@@ -3451,6 +4166,7 @@
                 inputResponse: currentResponse,
                 outputResponse: currentResponse,
                 rawOutput: '',
+                ...promptLogFields,
               });
             }
           }
@@ -3463,6 +4179,7 @@
               failed: true,
               inputResponse: currentResponse,
               outputResponse: currentResponse,
+              ...promptLogFields,
               error: err.message,
             });
           }
@@ -3472,6 +4189,9 @@
       if (lastPipelineRun) {
         lastPipelineRun.postResults = postResults;
         lastPipelineRun.status = lastPipelineRun.preReused ? 'pre-reused' : 'complete';
+        lastPipelineRun.cbsContext = cbsContext;
+        lastPipelineRun.cbsContextHash = cbsContextHash;
+        lastPipelineRun.cbsWarnings = mergeAgentCbsWarnings(runCbsWarnings);
         if (keepRunDetails) lastPipelineRun.finalResponse = currentResponse;
       }
 
@@ -3968,6 +4688,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${resultBadge}
         ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
+        ${Array.isArray(result?.cbsWarnings) && result.cbsWarnings.length ? `<span class="badge neutral">CBS 경고 ${escHtml(result.cbsWarnings.length)}</span>` : ''}
       </div>`;
       const memoryButton = memoryInspectorButtonHtml(agent);
 
@@ -3977,16 +4698,20 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       if (agent.mode === 'post') {
         return `<h2>${escHtml(agent.name)}</h2>${meta}
+          ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
           ${runLogDetailBlockHtml('입력 응답', result, 'inputResponse', '(입력 응답 없음)')}
           ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
           ${runLogDetailBlockHtml('적용 후 응답', result, 'outputResponse', '(적용 후 응답 없음)')}
+          ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
 
       return `<h2>${escHtml(agent.name)}</h2>${meta}
         ${memoryButton}
+        ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('생성된 Note', result, 'content', '(노트 없음)')}
         ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', runLogFieldValue(result, 'content', '(원본 출력 없음)'))}
+        ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
     }
 
@@ -5995,12 +6720,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
         const settingBlocks = runContext.settingBlocks;
         const runLogEnabled = isRunLogEnabled(conf);
-        const preReuseKey = runLogEnabled ? buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf) : '';
+        const preReuseKey = runLogEnabled ? buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf, runContext.cbsContext) : '';
         const previousRun = runLogEnabled ? await loadRunLogForScope(runScope, conf.debugLog) : null;
         const reusableRun = findReusablePreRun(previousRun, preReuseKey);
 
         if (reusableRun) {
           lastPipelineRun = createPreReusedRunLog(type, pipeline, conf, runScope, chatContext, settingBlocks, reusableRun, preReuseKey);
+          lastPipelineRun.cbsContext = runContext.cbsContext;
+          lastPipelineRun.cbsContextHash = hashAgentCbsContext(runContext.cbsContext);
+          lastPipelineRun.cbsWarnings = mergeAgentCbsWarnings(lastPipelineRun.cbsWarnings || []);
           const injectedMessages = injectAgentNotes(messages, lastPipelineRun.notes);
           await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
           if (conf.debugLog) {
@@ -6017,6 +6745,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           lastPipelineRun.userInput = getUserInput(chatContext.messages);
           lastPipelineRun.settingBlocks = settingBlocks.content;
           lastPipelineRun.settingBlockStats = settingBlocks.stats;
+          lastPipelineRun.cbsContext = runContext.cbsContext;
+          lastPipelineRun.cbsContextHash = hashAgentCbsContext(runContext.cbsContext);
+          lastPipelineRun.cbsWarnings = [];
           lastPipelineRun.preReuseKey = preReuseKey;
           lastPipelineRun.preReused = false;
           Object.assign(lastPipelineRun, runChatContextMeta(chatContext));
