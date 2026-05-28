@@ -6866,7 +6866,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const conf = await getConfig();
         const bypassReason = getAuxRequestBypassReason(messages, type, conf);
         if (bypassReason) {
-          lastPipelineRun = null;
           if (conf.debugLog) console.log(`Agents! bypassed: ${bypassReason}`);
           return messages;
         }
