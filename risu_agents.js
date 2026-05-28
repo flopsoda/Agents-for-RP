@@ -1,7 +1,7 @@
 //@name risu_agents
 //@display-name Agents!
 //@api 3.0
-//@version 1.1.9
+//@version 1.1.10
 //@update-url https://raw.githubusercontent.com/flopsoda/Agents-for-RP/main/risu_agents.js
 //@arg agents_provider string Analysis agent provider label. e.g. openai
 //@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
