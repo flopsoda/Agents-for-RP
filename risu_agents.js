@@ -13,6 +13,7 @@
 //@arg agents_debug_log string Print Agents! prompt flow to console. true/false (default: false)
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
 //@arg agents_bypass_aux_requests string Skip Agents! for auxiliary RisuAI requests. true/false (default: true)
+//@arg agents_post_trigger_mode string Post-agent trigger mode. auto/manual (default: auto)
 //@arg agents_extra_body_json string Extra JSON body merged into agent API requests
 //@arg agents_proxy_url string Optional CORS proxy URL for agent requests
 //@arg agents_proxy_key string Optional CORS proxy access token
@@ -68,7 +69,10 @@
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
+    const MANUAL_POST_UI_ID = 'risu-agents-manual-post';
     const AGENT_LLM_TIMEOUT_MS = 120000;
+    const POST_TRIGGER_AUTO = 'auto';
+    const POST_TRIGGER_MANUAL = 'manual';
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: [
@@ -160,6 +164,7 @@
       const debugLog = parseBool(preferArgumentValue(await Risuai.getArgument('agents_debug_log'), vault.debugLog ?? false), false);
       const runLogEnabled = parseBool(preferArgumentValue(await Risuai.getArgument('agents_run_log_enabled'), vault.runLogEnabled ?? false), false);
       const bypassAuxRequests = parseBool(preferArgumentValue(await Risuai.getArgument('agents_bypass_aux_requests'), vault.bypassAuxRequests ?? true), true);
+      const postTriggerMode = normalizePostTriggerMode(preferArgumentValue(await Risuai.getArgument('agents_post_trigger_mode'), vault.postTriggerMode || POST_TRIGGER_AUTO));
       const extraBodyJson = String(preferArgumentValue(await Risuai.getArgument('agents_extra_body_json'), vault.extraBodyJson || '')).trim();
       const proxyUrl = normalizeProxyUrl(preferArgumentValue(await Risuai.getArgument('agents_proxy_url'), vault.proxyUrl || ''));
       const proxyKey = String(preferArgumentValue(await Risuai.getArgument('agents_proxy_key'), vault.proxyKey || '')).trim();
@@ -215,6 +220,7 @@
         debugLog,
         runLogEnabled,
         bypassAuxRequests,
+        postTriggerMode,
         extraBodyJson,
         proxyUrl,
         proxyKey,
@@ -297,6 +303,7 @@
         debugLog: conf?.debugLog === true,
         runLogEnabled: conf?.runLogEnabled === true,
         bypassAuxRequests: conf?.bypassAuxRequests !== false,
+        postTriggerMode: normalizePostTriggerMode(conf?.postTriggerMode || POST_TRIGGER_AUTO),
         extraBodyJson: normalizeExtraBodyJson(conf?.extraBodyJson || ''),
         proxyUrl: normalizeProxyUrl(conf?.proxyUrl || ''),
         proxyKey: String(conf?.proxyKey || ''),
@@ -4377,6 +4384,268 @@
       return `${left}\n\n${right}`;
     }
 
+    function pipelineHasPostAgents(pipeline) {
+      return (pipeline?.rows || [])
+        .slice(MAIN_ROW_INDEX + 1)
+        .some(row => (row.agents || []).some(agent => agent.enabled !== false));
+    }
+
+    async function runManualPostAgentsFromButton() {
+      await showManualPostStatus('후처리 실행 중', '현재 채팅의 마지막 AI 응답을 불러오는 중입니다.', true, false);
+      try {
+        const result = await executeManualPostAgents();
+        const changedText = result.changed
+          ? '마지막 AI 응답을 후처리 결과로 교체했습니다.'
+          : '후처리는 실행됐지만 응답 내용은 바뀌지 않았습니다.';
+        const detailText = result.successCount > 0
+          ? `${changedText} 성공한 Post-Agent: ${result.successCount}개.`
+          : `${changedText} 성공한 Post-Agent가 없습니다. Run Inspector에서 스킵/오류를 확인하세요.`;
+        setManualPostStatus('후처리 완료', detailText, true, true);
+      } catch (err) {
+        console.log(`Agents! manual post-agent run failed: ${err.message}`);
+        setManualPostStatus('후처리 실패', err.message, false, true);
+      }
+    }
+
+    async function executeManualPostAgents() {
+      const conf = await getConfig();
+      const pipeline = await getPipelineConfig(conf);
+      if (!pipelineHasPostAgents(pipeline)) {
+        throw new Error('활성화된 Post-Agent가 없습니다.');
+      }
+
+      const runScope = await getAgentMemoryScope(conf.debugLog);
+      const target = await loadManualPostTarget(conf.debugLog);
+      lastPipelineRun = await buildManualPostRunContext(conf, pipeline, runScope);
+
+      const originalContent = target.content;
+      const finalContent = await runPostPipeline(originalContent, conf, pipeline, 'manual-post');
+      const changed = finalContent !== originalContent;
+
+      if (changed) {
+        await saveManualPostTarget(target, finalContent);
+      }
+
+      if (lastPipelineRun) {
+        lastPipelineRun.status = 'manual-complete';
+        lastPipelineRun.reason = '';
+        lastPipelineRun.manualPost = true;
+        lastPipelineRun.finalResponse = finalContent;
+        await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
+      }
+
+      const postResults = Array.isArray(lastPipelineRun?.postResults) ? lastPipelineRun.postResults : [];
+      return {
+        changed,
+        successCount: postResults.filter(result => result.status === 'success').length,
+      };
+    }
+
+    async function loadManualPostTarget(debugLog) {
+      const errors = [];
+      let characterIndex = null;
+      let chatIndex = null;
+      try {
+        characterIndex = await Risuai.getCurrentCharacterIndex();
+      } catch (err) {
+        errors.push(`getCurrentCharacterIndex: ${err.message}`);
+      }
+      try {
+        chatIndex = await Risuai.getCurrentChatIndex();
+      } catch (err) {
+        errors.push(`getCurrentChatIndex: ${err.message}`);
+      }
+
+      if (!Number.isFinite(Number(characterIndex)) || !Number.isFinite(Number(chatIndex))) {
+        throw new Error(errors.join('; ') || '현재 캐릭터/채팅 인덱스를 찾지 못했습니다.');
+      }
+
+      const normalizedCharacterIndex = parseInt(characterIndex, 10);
+      const normalizedChatIndex = parseInt(chatIndex, 10);
+      let chat = null;
+      try {
+        chat = await Risuai.getChatFromIndex(normalizedCharacterIndex, normalizedChatIndex);
+      } catch (err) {
+        throw new Error(`현재 채팅을 불러오지 못했습니다: ${err.message}`);
+      }
+
+      const rawMessages = chat?.message;
+      if (!Array.isArray(rawMessages)) {
+        throw new Error(`현재 채팅의 message 배열을 찾지 못했습니다. keys=${objectKeysPreview(chat)}`);
+      }
+
+      const messageIndex = findLatestAssistantReplyIndex(rawMessages);
+      if (messageIndex < 0) {
+        throw new Error('마지막 유저 입력 뒤에 후처리할 AI 응답이 없습니다.');
+      }
+
+      const content = getStoredChatMessageContent(rawMessages[messageIndex]);
+      if (!content.trim()) {
+        throw new Error('후처리할 AI 응답이 비어 있습니다.');
+      }
+
+      if (debugLog) {
+        console.log(`Agents! manual post target: chat ${normalizedCharacterIndex}/${normalizedChatIndex}, message ${messageIndex}`);
+      }
+
+      return {
+        characterIndex: normalizedCharacterIndex,
+        chatIndex: normalizedChatIndex,
+        chat,
+        messageIndex,
+        content,
+      };
+    }
+
+    function findLatestAssistantReplyIndex(rawMessages) {
+      const lastUserIndex = findLastIndex(rawMessages, item => storedChatMessageRole(item) === 'user');
+      for (let idx = rawMessages.length - 1; idx >= 0; idx -= 1) {
+        if (lastUserIndex >= 0 && idx <= lastUserIndex) break;
+        if (storedChatMessageRole(rawMessages[idx]) === 'assistant' && getStoredChatMessageContent(rawMessages[idx]).trim()) {
+          return idx;
+        }
+      }
+      return -1;
+    }
+
+    function storedChatMessageRole(item) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      const rawRole = String(item.role || '').trim().toLowerCase().replace(/[_\s-]+/g, '');
+      if (rawRole === 'user') return 'user';
+      if (['assistant', 'char', 'character', 'bot', 'ai', 'model'].includes(rawRole)) return 'assistant';
+      return '';
+    }
+
+    function getStoredChatMessageContent(item) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      if (typeof item.data === 'string' || typeof item.data === 'number') return String(item.data);
+      if (typeof item.content === 'string' || typeof item.content === 'number') return String(item.content);
+      return '';
+    }
+
+    async function saveManualPostTarget(target, finalContent) {
+      let latestChat = target.chat;
+      try {
+        latestChat = await Risuai.getChatFromIndex(target.characterIndex, target.chatIndex) || target.chat;
+      } catch (_) {
+        latestChat = target.chat;
+      }
+      const sourceMessages = Array.isArray(latestChat?.message) ? latestChat.message : target.chat.message;
+      const nextMessages = sourceMessages.slice();
+      nextMessages[target.messageIndex] = setStoredChatMessageContent(nextMessages[target.messageIndex], finalContent);
+      const nextChat = {
+        ...latestChat,
+        message: nextMessages,
+      };
+      await Risuai.setChatToIndex(target.characterIndex, target.chatIndex, nextChat);
+    }
+
+    function setStoredChatMessageContent(message, content) {
+      const next = message && typeof message === 'object' && !Array.isArray(message)
+        ? { ...message }
+        : { role: 'char' };
+      if (Object.prototype.hasOwnProperty.call(next, 'data') || !Object.prototype.hasOwnProperty.call(next, 'content')) {
+        next.data = String(content ?? '');
+      } else {
+        next.content = String(content ?? '');
+      }
+      return next;
+    }
+
+    async function buildManualPostRunContext(conf, pipeline, runScope) {
+      const runKey = agentRunLogKey(runScope || {});
+      let sourceRun = null;
+      if (lastPipelineRun && (!runKey || lastPipelineRun.runKey === runKey)) {
+        sourceRun = lastPipelineRun;
+      }
+      if (!sourceRun && runKey) {
+        sourceRun = await loadRunLogForScope(runScope, conf.debugLog);
+      }
+      if (sourceRun) {
+        const hydratedRun = await hydrateRunLogForManualPost(sourceRun, conf.debugLog);
+        return {
+          ...hydratedRun,
+          status: 'manual-running',
+          reason: 'manual post-agent run',
+          pipelineSnapshot: isRunLogEnabled(conf) ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
+          postResults: [],
+          manualPost: true,
+          updatedAt: Date.now(),
+        };
+      }
+
+      const chatContext = await loadActualChatContext(null, conf.debugLog);
+      const runContext = await buildPipelineRunContext(chatContext.messages, chatContext, conf, pipeline);
+      const settingBlocks = runContext.settingBlocks;
+      const run = createRunLogBase('manual-post', pipeline, conf, runScope, 'manual-running', 'manual post-agent run');
+      return {
+        ...run,
+        settingBlocks: settingBlocks.content,
+        settingBlockStats: settingBlocks.stats,
+        cbsContext: runContext.cbsContext,
+        cbsContextHash: hashAgentCbsContext(runContext.cbsContext),
+        cbsWarnings: [],
+        ...runChatContextMeta(chatContext),
+        notes: [],
+        userInput: getUserInput(chatContext.messages),
+        manualPost: true,
+      };
+    }
+
+    async function hydrateRunLogForManualPost(run, debugLog) {
+      const hydrated = {
+        ...run,
+        preResults: Array.isArray(run.preResults) ? run.preResults.map(result => ({ ...result })) : [],
+        postResults: Array.isArray(run.postResults) ? run.postResults.map(result => ({ ...result })) : [],
+        notes: Array.isArray(run.notes) ? run.notes.map(note => ({ ...note })) : [],
+      };
+      if (hydrated.settingBlocks === undefined && hydrated.settingBlocksBodyKey) {
+        hydrated.settingBlocks = await loadRunLogBodyValue(hydrated.settingBlocksBodyKey, debugLog);
+      }
+      if (hydrated.finalResponse === undefined && hydrated.finalResponseBodyKey) {
+        hydrated.finalResponse = await loadRunLogBodyValue(hydrated.finalResponseBodyKey, debugLog);
+      }
+      hydrated.settingBlocks = hydrated.settingBlocks || hydrated.settingBlocksPreview || '';
+      return hydrated;
+    }
+
+    async function showManualPostStatus(title, message, isOk, done) {
+      setManualPostStatus(title, message, isOk, done);
+      await Risuai.showContainer('fullscreen');
+    }
+
+    function setManualPostStatus(title, message, isOk, done) {
+      document.body.innerHTML = buildManualPostStatusUI(title, message, isOk, done);
+      document.getElementById('manual-post-close')?.addEventListener('click', async () => {
+        await Risuai.hideContainer();
+      });
+      document.getElementById('manual-post-inspector')?.addEventListener('click', openRunInspector);
+    }
+
+    function buildManualPostStatusUI(title, message, isOk, done) {
+      return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>${youtubeThemeStyles()}</style></head><body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>Agents!</h1>
+      <p class="subtitle">수동 후처리</p>
+    </div>
+  </div>
+  <div class="card">
+    <h2>${escHtml(title)}</h2>
+    <div class="msg ${isOk ? 'ok' : 'err'}" style="display:block">${escHtml(message)}</div>
+  </div>
+</div>
+<div class="actions">
+  <div class="actions-inner">
+    ${done ? '<button id="manual-post-inspector" class="ghost">Run Inspector</button>' : ''}
+    <button id="manual-post-close" class="primary">닫기</button>
+  </div>
+</div>
+</body></html>`;
+    }
+
     // ── 컨텍스트 주입 ─────────────────────────────────────────────────────────
 
     function injectAgentNotes(messages, orderedNotes) {
@@ -4433,6 +4702,7 @@
       await unregisterKnownUIPart(SETTINGS_UI_ID);
       await unregisterKnownUIPart(HAMBURGER_UI_ID);
       await unregisterKnownUIPart(CHAT_UI_ID);
+      await unregisterKnownUIPart(MANUAL_POST_UI_ID);
       await Promise.all(LEGACY_UI_IDS.map(id => unregisterKnownUIPart(id)));
 
       try {
@@ -4466,6 +4736,19 @@
         console.log('Agents! chat menu button registered', chatButton?.id || chatButton || '');
       } catch (err) {
         console.log(`Agents! chat menu button registration failed: ${err.message}`);
+      }
+
+      try {
+        const manualPostButton = await Risuai.registerButton({
+          name: 'Agents! 후처리 실행',
+          icon: '↻',
+          iconType: 'html',
+          location: 'chat',
+          id: MANUAL_POST_UI_ID,
+        }, runManualPostAgentsFromButton);
+        console.log('Agents! manual post button registered', manualPostButton?.id || manualPostButton || '');
+      } catch (err) {
+        console.log(`Agents! manual post button registration failed: ${err.message}`);
       }
     }
 
@@ -4807,12 +5090,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         skipped: '스킵',
         empty: '빈 응답',
         'pre-reused': '재사용됨',
+        'manual-running': '수동 실행 중',
+        'manual-complete': '수동 완료',
+        'post-manual-pending': '수동 대기',
       };
       return labels[status] || status || '성공';
     }
 
     function statusBadgeClass(status) {
-      if (status === 'success' || status === 'updated' || status === 'reused' || status === 'pre-reused') return 'ok';
+      if (status === 'success' || status === 'updated' || status === 'reused' || status === 'pre-reused' || status === 'manual-complete') return 'ok';
       if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
       return 'neutral';
     }
@@ -5064,6 +5350,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         <select id="agents_bypass_aux_requests">
           <option value="true" ${conf.bypassAuxRequests ? 'selected' : ''}>켜짐 - memory/translate/otherAx 등 보조 요청은 통과</option>
           <option value="false" ${!conf.bypassAuxRequests ? 'selected' : ''}>꺼짐 - 모든 요청에 Agents! 실행</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="agents_post_trigger_mode">후처리 실행 방식</label>
+        <select id="agents_post_trigger_mode">
+          <option value="auto" ${conf.postTriggerMode !== POST_TRIGGER_MANUAL ? 'selected' : ''}>자동 - afterRequest 훅에서 실행</option>
+          <option value="manual" ${conf.postTriggerMode === POST_TRIGGER_MANUAL ? 'selected' : ''}>수동만 - 채팅 메뉴 버튼으로 실행</option>
         </select>
       </div>
       <div class="field">
@@ -6124,6 +6417,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
         runLogEnabled: initialConf.runLogEnabled === true,
         bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
+        postTriggerMode: normalizePostTriggerMode(getInputValue('agents_post_trigger_mode') || initialConf.postTriggerMode),
         extraBodyJson: normalizeExtraBodyJson(getInputValue('agents_extra_body_json')),
         proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
         proxyKey: getInputValue('agents_proxy_key') || initialConf.proxyKey || '',
@@ -6146,6 +6440,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_debug_log', String(conf.debugLog));
       await Risuai.setArgument('agents_run_log_enabled', String(conf.runLogEnabled === true));
       await Risuai.setArgument('agents_bypass_aux_requests', String(conf.bypassAuxRequests));
+      await Risuai.setArgument('agents_post_trigger_mode', conf.postTriggerMode);
       await Risuai.setArgument('agents_extra_body_json', conf.extraBodyJson || '');
       await Risuai.setArgument('agents_proxy_url', conf.proxyUrl || '');
       await Risuai.setArgument('agents_proxy_key', conf.proxyKey || '');
@@ -6753,6 +7048,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return fallback;
     }
 
+    function normalizePostTriggerMode(value) {
+      const raw = String(value || POST_TRIGGER_AUTO).trim().toLowerCase();
+      return raw === POST_TRIGGER_MANUAL ? POST_TRIGGER_MANUAL : POST_TRIGGER_AUTO;
+    }
+
     function requiredFloat(id, fallback) {
       const parsed = parseFloat(getInputValue(id));
       return Number.isFinite(parsed) ? parsed : fallback;
@@ -6950,9 +7250,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         if (!lastPipelineRun) return content;
 
         const pipeline = await getPipelineConfig(conf);
-        const hasPostAgents = pipeline.rows
-          .slice(MAIN_ROW_INDEX + 1)
-          .some(row => (row.agents || []).some(agent => agent.enabled !== false));
+        const hasPostAgents = pipelineHasPostAgents(pipeline);
 
         if (!hasPostAgents) {
           if (lastPipelineRun) {
@@ -6961,6 +7259,17 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
             if (!isRunLogEnabled(conf)) lastPipelineRun = null;
           }
+          return content;
+        }
+
+        if (conf.postTriggerMode === POST_TRIGGER_MANUAL) {
+          if (lastPipelineRun) {
+            lastPipelineRun.status = 'post-manual-pending';
+            lastPipelineRun.reason = 'manual post-agent mode';
+            if (isRunLogEnabled(conf)) lastPipelineRun.finalResponse = String(content ?? '');
+            await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
+          }
+          if (conf.debugLog) console.log('Agents! afterRequest post-agents pending: manual post-agent mode');
           return content;
         }
 
