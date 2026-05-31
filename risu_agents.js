@@ -717,6 +717,7 @@
         currentChatContext,
         chatContext,
       });
+      const globalNoteReplacement = String(sources.character?.replaceGlobalNote || '').trim();
       const historyCache = new Map();
       return {
         ...sources,
@@ -726,6 +727,7 @@
         activeLorebooks: loreMatch.activeLorebooks,
         loreStats: loreMatch.stats,
         settingBlocks,
+        globalNoteReplacement,
         cbsContext,
         currentChatContext,
         historyForWindow(windowSize) {
@@ -2775,6 +2777,7 @@
         includeHistory: agent?.includeHistory !== false,
         includeUserInput: agent?.includeUserInput !== false,
         includePreviousNotes: agent?.includePreviousNotes !== false,
+        includeGlobalNoteReplacement: agent?.includeGlobalNoteReplacement === true,
         memoryEnabled: mode === 'pre' && agent?.memoryEnabled === true,
         memoryInstruction: String(agent?.memoryInstruction || ''),
         memoryFormat: String(agent?.memoryFormat || ''),
@@ -2917,6 +2920,9 @@
           authorNote: '(작가의 노트 없음)',
           activeLorebooks: [],
         }));
+      }
+      if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
+        sections.push(`[글로벌 노트 덮어쓰기]\n${context.globalNoteReplacement}`);
       }
       if (agent.mode === 'pre' && agent.includeHistory) {
         sections.push(`[최근 대화]\n${context.history || '(최근 대화 없음)'}`);
@@ -3578,6 +3584,7 @@
         userInput: '',
         settingBlocks: '',
         settingBlockStats: null,
+        globalNoteReplacement: '',
         cbsContextHash: '',
         cbsWarnings: [],
         preReuseVersion: PRE_REUSE_VERSION,
@@ -3606,7 +3613,7 @@
       };
     }
 
-    function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf, cbsContext = null) {
+    function buildPreReuseKey(scope, chatContext, settingBlocks, pipeline, conf, cbsContext = null, globalNoteReplacement = '') {
       if (chatContext?.available !== true || !scope?.chatKey) return '';
       const contextMessages = Array.isArray(chatContext.messages) ? chatContext.messages : [];
       const messageCount = chatContext.messageCount ?? contextMessages.length;
@@ -3614,6 +3621,7 @@
       const currentUserHash = hashCurrentUserMessage(contextMessages);
       const recentHistoryHash = hashRecentMessages(contextMessages, maxHistoryWindow);
       const settingBlocksHash = hashTextBlock(settingBlocks?.content || '');
+      const globalNoteReplacementHash = hashTextBlock(globalNoteReplacement || '');
       const preAgentsHash = hashPreAgentConfig(pipeline, conf);
       const cbsContextHash = hashAgentCbsContext(cbsContext);
       const keyHash = createTextHasher()
@@ -3623,6 +3631,7 @@
         .update('currentUserHash').update(currentUserHash)
         .update('recentHistoryHash').update(recentHistoryHash)
         .update('settingBlocksHash').update(settingBlocksHash)
+        .update('globalNoteReplacementHash').update(globalNoteReplacementHash)
         .update('cbsContextHash').update(cbsContextHash)
         .update('preAgentsHash').update(preAgentsHash)
         .digest();
@@ -3721,6 +3730,7 @@
             .update(Boolean(agent.includeHistory))
             .update(Boolean(agent.includeUserInput))
             .update(Boolean(agent.includePreviousNotes))
+            .update(Boolean(agent.includeGlobalNoteReplacement))
             .update(Boolean(agent.mode === 'pre' && agent.memoryEnabled))
             .update(agent.memoryInstruction || '')
             .update(agent.memoryFormat || '')
@@ -3758,7 +3768,7 @@
       return previousRun;
     }
 
-    function createPreReusedRunLog(type, pipeline, conf, scope, chatContext, settingBlocks, previousRun, preReuseKey) {
+    function createPreReusedRunLog(type, pipeline, conf, scope, chatContext, settingBlocks, previousRun, preReuseKey, globalNoteReplacement = '') {
       const notes = JSON.parse(JSON.stringify(previousRun.notes || []));
       const preResults = JSON.parse(JSON.stringify(previousRun.preResults || [])).map(result => ({
         ...result,
@@ -3772,6 +3782,7 @@
         pipelineSnapshot: JSON.parse(JSON.stringify(pipeline)),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
+        globalNoteReplacement,
         ...runChatContextMeta(chatContext),
         preReuseVersion: PRE_REUSE_VERSION,
         preReuseKey,
@@ -3979,6 +3990,7 @@
       const keepRunDetails = isRunLogEnabled(conf);
       const cbsContext = runContext?.cbsContext || null;
       const cbsContextHash = hashAgentCbsContext(cbsContext);
+      const globalNoteReplacement = String(runContext?.globalNoteReplacement || '').trim();
       const runCbsWarnings = [];
       const notes = [];
       const userInput = getUserInput(contextMessages);
@@ -4019,6 +4031,7 @@
           pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
           settingBlocks: settingBlocks.content,
           settingBlockStats: settingBlocks.stats,
+          globalNoteReplacement,
           cbsContext,
           cbsContextHash,
           cbsWarnings: [],
@@ -4077,6 +4090,7 @@
             : await loadAgentMemoryReadOnly(agent, memoryScope, conf.debugLog, memoryUnavailableReason);
           const rawPrompt = buildAgentPrompt(agent, {
             settingBlocks: settingBlocks.content,
+            globalNoteReplacement,
             history,
             userInput,
             notes,
@@ -4203,6 +4217,7 @@
         pipelineSnapshot: keepRunDetails ? JSON.parse(JSON.stringify(pipeline)) : createEmptyPipeline(),
         settingBlocks: settingBlocks.content,
         settingBlockStats: settingBlocks.stats,
+        globalNoteReplacement,
         cbsContext,
         cbsContextHash,
         cbsWarnings: mergeAgentCbsWarnings(runCbsWarnings),
@@ -4237,6 +4252,7 @@
           authorNote: '(작가의 노트 없음)',
           activeLorebooks: [],
         }),
+        globalNoteReplacement: '',
         notes: [],
       };
       const postResults = Array.isArray(previousRun.postResults) ? previousRun.postResults : [];
@@ -4279,6 +4295,7 @@
         }
         const rawPrompt = buildAgentPrompt(agent, {
           settingBlocks: previousRun.settingBlocks,
+          globalNoteReplacement: previousRun.globalNoteReplacement || '',
           notes: previousRun.notes,
           currentResponse,
         });
@@ -5531,6 +5548,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function agentForExport(agent) {
         const exported = cloneJson(agent);
+        exported.includeGlobalNoteReplacement = exported.includeGlobalNoteReplacement === true;
         exported.modelPresetId = UNSET_MODEL_PRESET_ID;
         return exported;
       }
@@ -5650,6 +5668,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           <div class="field"><label for="edit_systemPrompt">System Prompt</label><textarea id="edit_systemPrompt">${escHtml(agent.systemPrompt)}</textarea></div>
           <div class="field"><label for="edit_outputInstruction">Output Instruction</label><textarea id="edit_outputInstruction">${escHtml(agent.outputInstruction)}</textarea></div>
           <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함</label>
+          <label class="checkline"><input id="edit_includeGlobalNoteReplacement" type="checkbox" ${agent.includeGlobalNoteReplacement ? 'checked' : ''}> 글로벌 노트 덮어쓰기 포함</label>
           <label class="checkline"><input id="edit_includeHistory" type="checkbox" ${agent.includeHistory ? 'checked' : ''}> 최근 대화 포함</label>
           <label class="checkline"><input id="edit_includeUserInput" type="checkbox" ${agent.includeUserInput ? 'checked' : ''}> 현재 유저 입력 포함</label>
           <label class="checkline"><input id="edit_includePreviousNotes" type="checkbox" ${agent.includePreviousNotes ? 'checked' : ''}> 이전 노트 포함</label>
@@ -5691,7 +5710,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           renderAgentEditor();
         });
 
-        ['enabled', 'includeSettingBlocks', 'includeHistory', 'includeUserInput', 'includePreviousNotes'].forEach((field) => {
+        ['enabled', 'includeSettingBlocks', 'includeGlobalNoteReplacement', 'includeHistory', 'includeUserInput', 'includePreviousNotes'].forEach((field) => {
           document.getElementById(`edit_${field}`)?.addEventListener('change', (event) => {
             agent[field] = event.target.checked;
             renderPipeline();
@@ -5749,6 +5768,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             '[현재 활성화된 로어북]',
             '(실제 요청에 포함된 활성 로어북이 들어갑니다)',
           ].join('\n'),
+          globalNoteReplacement:
+            '(현재 캐릭터의 글로벌 노트 덮어쓰기 내용이 들어갑니다)',
           history:
             '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다. 짧은 대화에서는 봇 첫 메시지도 포함됩니다)',
           userInput:
@@ -6798,12 +6819,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
         const settingBlocks = runContext.settingBlocks;
         const runLogEnabled = isRunLogEnabled(conf);
-        const preReuseKey = runLogEnabled ? buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf, runContext.cbsContext) : '';
+        const preReuseKey = runLogEnabled
+          ? buildPreReuseKey(runScope, chatContext, settingBlocks, pipeline, conf, runContext.cbsContext, runContext.globalNoteReplacement)
+          : '';
         const previousRun = runLogEnabled ? await loadRunLogForScope(runScope, conf.debugLog) : null;
         const reusableRun = findReusablePreRun(previousRun, preReuseKey);
 
         if (reusableRun) {
-          lastPipelineRun = createPreReusedRunLog(type, pipeline, conf, runScope, chatContext, settingBlocks, reusableRun, preReuseKey);
+          lastPipelineRun = createPreReusedRunLog(type, pipeline, conf, runScope, chatContext, settingBlocks, reusableRun, preReuseKey, runContext.globalNoteReplacement);
           lastPipelineRun.cbsContext = runContext.cbsContext;
           lastPipelineRun.cbsContextHash = hashAgentCbsContext(runContext.cbsContext);
           lastPipelineRun.cbsWarnings = mergeAgentCbsWarnings(lastPipelineRun.cbsWarnings || []);
@@ -6823,6 +6846,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           lastPipelineRun.userInput = getUserInput(chatContext.messages);
           lastPipelineRun.settingBlocks = settingBlocks.content;
           lastPipelineRun.settingBlockStats = settingBlocks.stats;
+          lastPipelineRun.globalNoteReplacement = runContext.globalNoteReplacement;
           lastPipelineRun.cbsContext = runContext.cbsContext;
           lastPipelineRun.cbsContextHash = hashAgentCbsContext(runContext.cbsContext);
           lastPipelineRun.cbsWarnings = [];
