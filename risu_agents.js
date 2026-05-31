@@ -151,6 +151,7 @@
     const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
     let shortcutConfigCache = normalizeShortcutConfig(null);
+    let shortcutActionMapCache = buildShortcutActionMap(shortcutConfigCache);
     let shortcutOpenInFlight = false;
     let shortcutLastOpenedAt = 0;
 
@@ -4561,15 +4562,15 @@
     async function registerGlobalShortcutHandler() {
       try {
         const conf = await getConfig();
-        shortcutConfigCache = normalizeShortcutConfig(conf.shortcuts);
+        updateShortcutCache(conf.shortcuts);
         const rootDoc = await Risuai.getRootDocument();
+        const rootBody = await getRootBodyElement(rootDoc);
         const previousId = await Risuai.safeLocalStorage.getItem(SHORTCUT_LISTENER_STORAGE_KEY).catch(() => '');
-        if (previousId) {
-          await rootDoc.removeEventListener('keydown', previousId).catch(() => {});
-        }
-        const listenerId = await rootDoc.addEventListener('keydown', handleGlobalShortcutKeydown);
+        await removeShortcutListenerFromKnownTargets(rootDoc, rootBody, previousId);
+        const registration = await addShortcutListener(rootDoc, rootBody);
+        const listenerId = registration.id;
         await Risuai.safeLocalStorage.setItem(SHORTCUT_LISTENER_STORAGE_KEY, listenerId).catch(() => {});
-        console.log('Agents! shortcuts registered', shortcutConfigCache);
+        console.log(`Agents! shortcuts registered on ${registration.target}`, shortcutConfigCache);
       } catch (err) {
         console.log(`Agents! shortcut registration failed: ${err.message}`);
       }
@@ -4580,13 +4581,9 @@
         if (event?.repeat === true) return;
         const shortcut = normalizeShortcutEvent(event);
         if (!shortcut) return;
-        if (await isEditableShortcutTarget(event) && !isFunctionKeyShortcut(shortcut)) return;
-
-        const shortcuts = normalizeShortcutConfig(shortcutConfigCache);
-        let action = '';
-        if (shortcuts.settings && shortcut === shortcuts.settings) action = 'settings';
-        if (shortcuts.runInspector && shortcut === shortcuts.runInspector) action = 'runInspector';
+        const action = shortcutActionMapCache[shortcut] || '';
         if (!action) return;
+        if (!isFunctionKeyShortcut(shortcut) && await isEditableShortcutTarget(event)) return;
 
         if (typeof event?.preventDefault === 'function') event.preventDefault();
         if (typeof event?.stopPropagation === 'function') event.stopPropagation();
@@ -4605,6 +4602,56 @@
       } finally {
         shortcutOpenInFlight = false;
       }
+    }
+
+    async function getRootBodyElement(rootDoc) {
+      try {
+        if (!rootDoc || typeof rootDoc.querySelector !== 'function') return null;
+        return await rootDoc.querySelector('body');
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function removeShortcutListenerFromKnownTargets(rootDoc, rootBody, listenerId) {
+      if (!listenerId) return;
+      const targets = [rootBody, rootDoc].filter(Boolean);
+      const optionsList = [{ capture: true }, undefined];
+      for (const target of targets) {
+        if (typeof target.removeEventListener !== 'function') continue;
+        for (const options of optionsList) {
+          await target.removeEventListener('keydown', listenerId, options).catch(() => {});
+        }
+      }
+    }
+
+    async function addShortcutListener(rootDoc, rootBody) {
+      if (rootBody && typeof rootBody.addEventListener === 'function') {
+        try {
+          const id = await rootBody.addEventListener('keydown', handleGlobalShortcutKeydown, { capture: true });
+          return { id, target: 'root body' };
+        } catch (err) {
+          console.log(`Agents! shortcut body listener failed: ${err.message}`);
+        }
+      }
+
+      const id = await rootDoc.addEventListener('keydown', handleGlobalShortcutKeydown);
+      return { id, target: 'root document' };
+    }
+
+    function updateShortcutCache(shortcuts) {
+      shortcutConfigCache = normalizeShortcutConfig(shortcuts);
+      shortcutActionMapCache = buildShortcutActionMap(shortcutConfigCache);
+    }
+
+    function buildShortcutActionMap(shortcuts) {
+      const normalized = normalizeShortcutConfig(shortcuts);
+      const map = {};
+      if (normalized.settings) map[normalized.settings] = 'settings';
+      if (normalized.runInspector && normalized.runInspector !== normalized.settings) {
+        map[normalized.runInspector] = 'runInspector';
+      }
+      return map;
     }
 
     async function isEditableShortcutTarget(event) {
@@ -5593,7 +5640,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const shortcutError = validateShortcutConfig(next.shortcuts);
           if (shortcutError) throw new Error(shortcutError);
           await saveLiteConfig(next);
-          shortcutConfigCache = normalizeShortcutConfig(next.shortcuts);
+          updateShortcutCache(next.shortcuts);
           pipelinePresetStoreState = next.pipelinePresetStore;
           activePipelinePresetId = pipelinePresetStoreState.activePresetId;
           providerKeysState = { ...(next.providerKeys || {}) };
