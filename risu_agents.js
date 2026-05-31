@@ -152,6 +152,8 @@
     let lastPipelineRun = null;
     let shortcutConfigCache = normalizeShortcutConfig(null);
     let shortcutActionMapCache = buildShortcutActionMap(shortcutConfigCache);
+    let shortcutDebugLogCache = false;
+    let shortcutTraceSeq = 0;
     let shortcutOpenInFlight = false;
     let shortcutLastOpenedAt = 0;
 
@@ -233,6 +235,7 @@
         pipeline,
         pipelinePresetStore: vault.pipelinePresetStore || null,
       };
+      shortcutDebugLogCache = config.debugLog === true;
       if (!vault.exists) await saveConfigVault(config, debugLog);
       return config;
     }
@@ -4486,24 +4489,40 @@
 
     // ── 설정 GUI ──────────────────────────────────────────────────────────────
 
-    async function openLiteDashboard() {
+    async function openLiteDashboard(traceArg = null) {
+      const trace = normalizeShortcutTraceArg(traceArg);
+      trace?.mark('openLiteDashboard entered');
       console.log('Agents! opening full settings dashboard');
       const conf = await getConfig();
+      trace?.mark('getConfig');
       const pipelineStore = await getPipelinePresetStore(conf);
+      trace?.mark('getPipelinePresetStore');
       const pipeline = normalizePipelineConfig(getActivePipelinePreset(pipelineStore)?.pipeline || defaultPipelineConfig(), conf.modelPresets);
+      trace?.mark('pipeline normalized');
       document.body.innerHTML = buildLiteUI(conf, pipeline, pipelineStore);
+      trace?.mark('HTML generated');
       setupLiteHandlers(conf, pipeline, pipelineStore);
+      trace?.mark('handlers setup');
       await Risuai.showContainer('fullscreen');
+      trace?.mark('showContainer complete');
     }
 
-    async function openRunInspector() {
+    async function openRunInspector(traceArg = null) {
+      const trace = normalizeShortcutTraceArg(traceArg);
+      trace?.mark('openRunInspector entered');
       console.log('Agents! opening run inspector');
       const conf = await getConfig();
+      trace?.mark('getConfig');
       const pipeline = await getPipelineConfig(conf);
+      trace?.mark('getPipelineConfig');
       const runLog = await loadCurrentRunLog(conf.debugLog, conf.runLogEnabled);
+      trace?.mark('loadCurrentRunLog');
       document.body.innerHTML = buildRunInspectorUI(pipeline, runLog);
+      trace?.mark('HTML generated');
       setupRunInspectorHandlers(conf, pipeline, runLog);
+      trace?.mark('handlers setup');
       await Risuai.showContainer('fullscreen');
+      trace?.mark('showContainer complete');
     }
 
     const menuIcon = '🧠';
@@ -4577,27 +4596,45 @@
     }
 
     async function handleGlobalShortcutKeydown(event) {
+      let trace = null;
       try {
         if (event?.repeat === true) return;
         const shortcut = normalizeShortcutEvent(event);
         if (!shortcut) return;
         const action = shortcutActionMapCache[shortcut] || '';
         if (!action) return;
-        if (!isFunctionKeyShortcut(shortcut) && await isEditableShortcutTarget(event)) return;
+        trace = createShortcutTrace(action);
+        trace?.mark('handler entered');
+        trace?.mark(`shortcut matched ${shortcut}`);
+        if (!isFunctionKeyShortcut(shortcut)) {
+          if (await isEditableShortcutTarget(event)) {
+            trace?.mark('editable target blocked');
+            return;
+          }
+          trace?.mark('editable target checked');
+        } else {
+          trace?.mark('function key target check skipped');
+        }
 
         if (typeof event?.preventDefault === 'function') event.preventDefault();
         if (typeof event?.stopPropagation === 'function') event.stopPropagation();
 
         const now = Date.now();
-        if (shortcutOpenInFlight || now - shortcutLastOpenedAt < 450) return;
+        if (shortcutOpenInFlight || now - shortcutLastOpenedAt < 450) {
+          trace?.mark('open skipped by cooldown');
+          return;
+        }
         shortcutOpenInFlight = true;
         shortcutLastOpenedAt = now;
+        trace?.mark('open start');
         if (action === 'settings') {
-          await openLiteDashboard();
+          await openLiteDashboard(trace);
         } else {
-          await openRunInspector();
+          await openRunInspector(trace);
         }
+        trace?.mark('open complete');
       } catch (err) {
+        trace?.fail('handler failed', err);
         console.log(`Agents! shortcut handler failed: ${err.message}`);
       } finally {
         shortcutOpenInFlight = false;
@@ -4642,6 +4679,43 @@
     function updateShortcutCache(shortcuts) {
       shortcutConfigCache = normalizeShortcutConfig(shortcuts);
       shortcutActionMapCache = buildShortcutActionMap(shortcutConfigCache);
+    }
+
+    function createShortcutTrace(action) {
+      if (!shortcutDebugLogCache) return null;
+      const id = ++shortcutTraceSeq;
+      const start = nowMs();
+      let last = start;
+      return {
+        __agentsShortcutTrace: true,
+        action,
+        mark(label) {
+          const current = nowMs();
+          console.log(`Agents! shortcut trace #${id} ${action}: ${label} +${formatTraceMs(current - last)}ms total=${formatTraceMs(current - start)}ms`);
+          last = current;
+        },
+        fail(label, err) {
+          const current = nowMs();
+          const message = err?.message ? ` (${err.message})` : '';
+          console.log(`Agents! shortcut trace #${id} ${action}: ${label}${message} +${formatTraceMs(current - last)}ms total=${formatTraceMs(current - start)}ms`);
+          last = current;
+        },
+      };
+    }
+
+    function normalizeShortcutTraceArg(value) {
+      return value?.__agentsShortcutTrace === true && typeof value.mark === 'function'
+        ? value
+        : null;
+    }
+
+    function nowMs() {
+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now();
+      return Date.now();
+    }
+
+    function formatTraceMs(value) {
+      return Math.max(0, Math.round(Number(value) || 0));
     }
 
     function buildShortcutActionMap(shortcuts) {
@@ -5641,6 +5715,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           if (shortcutError) throw new Error(shortcutError);
           await saveLiteConfig(next);
           updateShortcutCache(next.shortcuts);
+          shortcutDebugLogCache = next.debugLog === true;
           pipelinePresetStoreState = next.pipelinePresetStore;
           activePipelinePresetId = pipelinePresetStoreState.activePresetId;
           providerKeysState = { ...(next.providerKeys || {}) };
