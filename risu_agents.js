@@ -2943,7 +2943,10 @@
         sections.push(`[현재 응답]\n${context.currentResponse || ''}`);
       }
 
-      sections.push(`[${agent.mode === 'post' ? '후처리 지시' : '현재 에이전트 지시'}]\n${agent.outputInstruction}`);
+      const outputInstruction = agent.mode === 'pre' && agent.memoryEnabled
+        ? `${agent.outputInstruction}\n\n${memoryFinalOutputReminder()}`
+        : agent.outputInstruction;
+      sections.push(`[${agent.mode === 'post' ? '후처리 지시' : '현재 에이전트 지시'}]\n${outputInstruction}`);
 
       const systemContent = [
         agent.systemPrompt,
@@ -3017,6 +3020,23 @@
       return lines.join('\n');
     }
 
+    function memoryFinalOutputReminder() {
+      return [
+        '마지막 출력 형식 검수:',
+        `반드시 [${MEMORY_NOTE_TAG}], [/${MEMORY_NOTE_TAG}], [${MEMORY_UPDATE_TAG}], [/${MEMORY_UPDATE_TAG}] 네 태그를 모두 포함하세요.`,
+        '태그 밖에는 아무 텍스트도 쓰지 마세요.',
+        `[${MEMORY_NOTE_TAG}]를 열었으면 반드시 [/${MEMORY_NOTE_TAG}]로 닫은 뒤 [${MEMORY_UPDATE_TAG}]를 시작하세요.`,
+        '',
+        `[${MEMORY_NOTE_TAG}]`,
+        '다음 에이전트나 메인 모델에게 전달할 보조 노트',
+        `[/${MEMORY_NOTE_TAG}]`,
+        '',
+        `[${MEMORY_UPDATE_TAG}]`,
+        '다음 턴에 유지할 최신 기억 전체',
+        `[/${MEMORY_UPDATE_TAG}]`,
+      ].join('\n');
+    }
+
     function parseTaggedBlock(text, tag) {
       const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const match = String(text || '').match(new RegExp(`\\[${escaped}\\]([\\s\\S]*?)\\[\\/${escaped}\\]`, 'i'));
@@ -3024,13 +3044,45 @@
     }
 
     function parseMemoryAgentOutput(text) {
+      const source = String(text || '');
       const note = parseTaggedBlock(text, MEMORY_NOTE_TAG);
       const memoryUpdate = parseTaggedBlock(text, MEMORY_UPDATE_TAG);
+      if (note === null && memoryUpdate !== null) {
+        const recoveredNote = recoverMissingMemoryNoteClose(source);
+        if (recoveredNote !== null) {
+          return {
+            ok: true,
+            recovered: true,
+            note: recoveredNote,
+            memoryUpdate: memoryUpdate || '',
+          };
+        }
+      }
       return {
         ok: note !== null && memoryUpdate !== null,
+        recovered: false,
         note: note || '',
         memoryUpdate: memoryUpdate || '',
       };
+    }
+
+    function recoverMissingMemoryNoteClose(text) {
+      const source = String(text || '');
+      const noteOpen = findMemoryTagIndex(source, MEMORY_NOTE_TAG, false);
+      const noteClose = findMemoryTagIndex(source, MEMORY_NOTE_TAG, true);
+      const updateOpen = findMemoryTagIndex(source, MEMORY_UPDATE_TAG, false);
+      const updateClose = findMemoryTagIndex(source, MEMORY_UPDATE_TAG, true);
+      if (noteOpen < 0 || noteClose >= 0 || updateOpen < 0 || updateClose < 0 || updateOpen <= noteOpen) return null;
+
+      const noteStart = noteOpen + `[${MEMORY_NOTE_TAG}]`.length;
+      return source.slice(noteStart, updateOpen).trim();
+    }
+
+    function findMemoryTagIndex(text, tag, closing = false) {
+      const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = closing ? `\\[\\/${escaped}\\]` : `\\[${escaped}\\]`;
+      const match = String(text || '').match(new RegExp(pattern, 'i'));
+      return match ? match.index : -1;
     }
 
     function hasMemoryEnabledPreAgents(pipeline) {
@@ -4127,7 +4179,7 @@
                     memoryStatus = 'chat-context-unavailable';
                   } else {
                     saved = await saveAgentMemory(agent, agentMemory, parsed.memoryUpdate, conf.debugLog);
-                    memoryStatus = saved ? 'updated' : 'storage-failed';
+                    memoryStatus = saved ? (parsed.recovered ? 'format-recovered' : 'updated') : 'storage-failed';
                   }
                 }
                 return {
@@ -4851,7 +4903,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     }
 
     function statusBadgeClass(status) {
-      if (status === 'success' || status === 'updated' || status === 'reused' || status === 'pre-reused') return 'ok';
+      if (status === 'success' || status === 'updated' || status === 'format-recovered' || status === 'reused' || status === 'pre-reused') return 'ok';
       if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
       return 'neutral';
     }
@@ -4860,6 +4912,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const labels = {
         disabled: '비활성',
         updated: '갱신됨',
+        'format-recovered': '포맷 복구됨',
         'empty-update': '빈 갱신',
         'parse-failed': '파싱 실패',
         'storage-failed': '저장 실패',
