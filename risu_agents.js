@@ -150,31 +150,71 @@
     const AGENTS_CONFIG_VAULT_KEY = 'risu_agents_config_vault_v1';
     const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
+    let configCache = null;
+    let pipelinePresetStoreCache = null;
     let shortcutConfigCache = normalizeShortcutConfig(null);
     let shortcutActionMapCache = buildShortcutActionMap(shortcutConfigCache);
     let shortcutDebugLogCache = false;
     let shortcutTraceSeq = 0;
     let shortcutOpenInFlight = false;
     let shortcutLastOpenedAt = 0;
+    let runInspectorLoadSeq = 0;
 
     // ── 설정 로드 ─────────────────────────────────────────────────────────────
 
     async function getConfig() {
       const vault = await loadConfigVault();
-      const provider = String(preferArgumentValue(await Risuai.getArgument('agents_provider'), vault.provider || DEFAULT_AGENT_PROVIDER));
-      const baseUrl = normalizeUrl(preferArgumentValue(await Risuai.getArgument('agents_base_url'), vault.baseUrl || DEFAULT_AGENT_BASE_URL));
-      const configuredApiKey  = String(preferArgumentValue(await Risuai.getArgument('agents_api_key'), vault.configuredApiKey || vault.apiKey || ''));
-      const model   = String(preferArgumentValue(await Risuai.getArgument('agents_model'), vault.model || DEFAULT_AGENT_MODEL));
-      const temperature = parseFloat(String(preferArgumentValue(await Risuai.getArgument('agents_temperature'), vault.temperature ?? '0.7')));
-      const maxTokens = parseOptionalInt(preferArgumentValue(await Risuai.getArgument('agents_max_tokens'), vault.maxTokens ?? ''));
-      const window  = Math.max(1, parseInt(preferArgumentValue(await Risuai.getArgument('agents_context_window'), vault.window || '10')) || 10);
-      const debugLog = parseBool(preferArgumentValue(await Risuai.getArgument('agents_debug_log'), vault.debugLog ?? false), false);
-      const runLogEnabled = parseBool(preferArgumentValue(await Risuai.getArgument('agents_run_log_enabled'), vault.runLogEnabled ?? false), false);
-      const bypassAuxRequests = parseBool(preferArgumentValue(await Risuai.getArgument('agents_bypass_aux_requests'), vault.bypassAuxRequests ?? true), true);
-      const extraBodyJson = String(preferArgumentValue(await Risuai.getArgument('agents_extra_body_json'), vault.extraBodyJson || '')).trim();
-      const proxyUrl = normalizeProxyUrl(preferArgumentValue(await Risuai.getArgument('agents_proxy_url'), vault.proxyUrl || ''));
-      const proxyKey = String(preferArgumentValue(await Risuai.getArgument('agents_proxy_key'), vault.proxyKey || '')).trim();
-      const proxyDirect = parseBool(preferArgumentValue(await Risuai.getArgument('agents_proxy_direct'), vault.proxyDirect ?? false), false);
+      const [
+        providerArg,
+        baseUrlArg,
+        configuredApiKeyArg,
+        modelArg,
+        temperatureArg,
+        maxTokensArg,
+        windowArg,
+        debugLogArg,
+        runLogEnabledArg,
+        bypassAuxRequestsArg,
+        extraBodyJsonArg,
+        proxyUrlArg,
+        proxyKeyArg,
+        proxyDirectArg,
+        providerKeysArg,
+        modelPresetsArg,
+        pipelineRaw,
+      ] = await Promise.all([
+        Risuai.getArgument('agents_provider'),
+        Risuai.getArgument('agents_base_url'),
+        Risuai.getArgument('agents_api_key'),
+        Risuai.getArgument('agents_model'),
+        Risuai.getArgument('agents_temperature'),
+        Risuai.getArgument('agents_max_tokens'),
+        Risuai.getArgument('agents_context_window'),
+        Risuai.getArgument('agents_debug_log'),
+        Risuai.getArgument('agents_run_log_enabled'),
+        Risuai.getArgument('agents_bypass_aux_requests'),
+        Risuai.getArgument('agents_extra_body_json'),
+        Risuai.getArgument('agents_proxy_url'),
+        Risuai.getArgument('agents_proxy_key'),
+        Risuai.getArgument('agents_proxy_direct'),
+        Risuai.getArgument('agents_provider_keys_json'),
+        Risuai.getArgument('agents_model_presets_json'),
+        Risuai.getArgument('agents_pipeline_json'),
+      ]);
+      const provider = String(preferArgumentValue(providerArg, vault.provider || DEFAULT_AGENT_PROVIDER));
+      const baseUrl = normalizeUrl(preferArgumentValue(baseUrlArg, vault.baseUrl || DEFAULT_AGENT_BASE_URL));
+      const configuredApiKey  = String(preferArgumentValue(configuredApiKeyArg, vault.configuredApiKey || vault.apiKey || ''));
+      const model   = String(preferArgumentValue(modelArg, vault.model || DEFAULT_AGENT_MODEL));
+      const temperature = parseFloat(String(preferArgumentValue(temperatureArg, vault.temperature ?? '0.7')));
+      const maxTokens = parseOptionalInt(preferArgumentValue(maxTokensArg, vault.maxTokens ?? ''));
+      const window  = Math.max(1, parseInt(preferArgumentValue(windowArg, vault.window || '10')) || 10);
+      const debugLog = parseBool(preferArgumentValue(debugLogArg, vault.debugLog ?? false), false);
+      const runLogEnabled = parseBool(preferArgumentValue(runLogEnabledArg, vault.runLogEnabled ?? false), false);
+      const bypassAuxRequests = parseBool(preferArgumentValue(bypassAuxRequestsArg, vault.bypassAuxRequests ?? true), true);
+      const extraBodyJson = String(preferArgumentValue(extraBodyJsonArg, vault.extraBodyJson || '')).trim();
+      const proxyUrl = normalizeProxyUrl(preferArgumentValue(proxyUrlArg, vault.proxyUrl || ''));
+      const proxyKey = String(preferArgumentValue(proxyKeyArg, vault.proxyKey || '')).trim();
+      const proxyDirect = parseBool(preferArgumentValue(proxyDirectArg, vault.proxyDirect ?? false), false);
       const shortcuts = normalizeShortcutConfig(vault.shortcuts);
       const fallbackConfig = {
         provider,
@@ -184,15 +224,8 @@
         maxTokens,
         window,
       };
-      const providerKeysRaw = preferArgumentValue(
-        await Risuai.getArgument('agents_provider_keys_json'),
-        vault.providerKeys ? JSON.stringify(vault.providerKeys) : '',
-      );
-      const modelPresetsRaw = preferArgumentValue(
-        await Risuai.getArgument('agents_model_presets_json'),
-        vault.modelPresets ? JSON.stringify(vault.modelPresets) : '',
-      );
-      const pipelineRaw = await Risuai.getArgument('agents_pipeline_json');
+      const providerKeysRaw = preferArgumentValue(providerKeysArg, vault.providerKeys ? JSON.stringify(vault.providerKeys) : '');
+      const modelPresetsRaw = preferArgumentValue(modelPresetsArg, vault.modelPresets ? JSON.stringify(vault.modelPresets) : '');
       const providerKeys = parseProviderKeys(
         providerKeysRaw,
         provider,
@@ -235,9 +268,37 @@
         pipeline,
         pipelinePresetStore: vault.pipelinePresetStore || null,
       };
-      shortcutDebugLogCache = config.debugLog === true;
+      try {
+        updateConfigCache(config);
+      } catch (err) {
+        if (debugLog) console.log(`Agents! config cache update failed: ${err.message}`);
+        configCache = config;
+        shortcutDebugLogCache = config.debugLog === true;
+        updateShortcutCache(config.shortcuts);
+      }
       if (!vault.exists) await saveConfigVault(config, debugLog);
       return config;
+    }
+
+    async function getCachedConfig(trace = null) {
+      if (configCache) {
+        trace?.mark('getConfig cache hit');
+        return configCache;
+      }
+      trace?.mark('getConfig cache miss');
+      const conf = await getConfig();
+      trace?.mark('getConfig fresh load');
+      return conf;
+    }
+
+    function updateConfigCache(conf) {
+      configCache = normalizeConfigVault(conf);
+      shortcutDebugLogCache = configCache.debugLog === true;
+      updateShortcutCache(configCache.shortcuts);
+      if (configCache.pipelinePresetStore) {
+        pipelinePresetStoreCache = normalizePipelinePresetStore(configCache.pipelinePresetStore, configCache.pipeline, configCache.modelPresets);
+      }
+      return configCache;
     }
 
     function preferArgumentValue(argValue, fallbackValue) {
@@ -259,10 +320,11 @@
 
     async function saveConfigVault(conf, debugLog = false) {
       try {
+        updateConfigCache(conf);
         await Risuai.pluginStorage.setItem(AGENTS_CONFIG_VAULT_KEY, {
           version: AGENTS_CONFIG_VAULT_VERSION,
           savedAt: new Date().toISOString(),
-          config: normalizeConfigVault(conf),
+          config: configCache,
         });
       } catch (err) {
         if (debugLog) console.log(`Agents! config vault save failed: ${err.message}`);
@@ -2707,9 +2769,23 @@
       return (store?.presets || []).find(preset => preset.id === store?.activePresetId) || store?.presets?.[0] || null;
     }
 
-    async function getPipelinePresetStore(conf) {
-      const legacyRaw = await Risuai.getArgument('agents_pipeline_json');
+    async function getPipelinePresetStore(conf, options = {}) {
+      if (options.preferCache && pipelinePresetStoreCache) return pipelinePresetStoreCache;
+
+      let legacyError = null;
+      let storeError = null;
+      const [legacyRaw, rawStore] = await Promise.all([
+        Risuai.getArgument('agents_pipeline_json').catch((err) => {
+          legacyError = err;
+          return '';
+        }),
+        Risuai.pluginStorage.getItem(PIPELINE_PRESETS_STORAGE_KEY).catch((err) => {
+          storeError = err;
+          return null;
+        }),
+      ]);
       let fallbackPipeline = defaultPipelineConfig();
+      if (legacyError && conf?.debugLog) console.log(`Agents! legacy pipeline JSON load failed: ${legacyError.message}`);
       if (legacyRaw || conf?.pipeline) {
         try {
           fallbackPipeline = normalizePipelineConfig(legacyRaw ? JSON.parse(String(legacyRaw)) : conf.pipeline, conf?.modelPresets);
@@ -2719,8 +2795,9 @@
       }
 
       try {
-        const rawStore = await Risuai.pluginStorage.getItem(PIPELINE_PRESETS_STORAGE_KEY);
+        if (storeError) throw storeError;
         const store = normalizePipelinePresetStore(rawStore || conf?.pipelinePresetStore, fallbackPipeline, conf?.modelPresets);
+        pipelinePresetStoreCache = store;
         if (!rawStore) {
           await Risuai.pluginStorage.setItem(PIPELINE_PRESETS_STORAGE_KEY, store);
         }
@@ -2740,6 +2817,7 @@
       }
       await Risuai.pluginStorage.setItem(PIPELINE_PRESETS_STORAGE_KEY, normalizedStore);
       if (active) await Risuai.setArgument('agents_pipeline_json', JSON.stringify(active.pipeline));
+      pipelinePresetStoreCache = normalizedStore;
       return normalizedStore;
     }
 
@@ -2765,8 +2843,8 @@
       return fallback;
     }
 
-    async function getPipelineConfig(conf) {
-      const store = await getPipelinePresetStore(conf);
+    async function getPipelineConfig(conf, options = {}) {
+      const store = await getPipelinePresetStore(conf, options);
       return normalizePipelineConfig(getActivePipelinePreset(store)?.pipeline || defaultPipelineConfig(), conf?.modelPresets);
     }
 
@@ -4493,10 +4571,11 @@
       const trace = normalizeShortcutTraceArg(traceArg);
       trace?.mark('openLiteDashboard entered');
       console.log('Agents! opening full settings dashboard');
-      const conf = await getConfig();
-      trace?.mark('getConfig');
-      const pipelineStore = await getPipelinePresetStore(conf);
-      trace?.mark('getPipelinePresetStore');
+      runInspectorLoadSeq += 1;
+      const conf = await getCachedConfig(trace);
+      const hadPipelineStoreCache = Boolean(pipelinePresetStoreCache);
+      const pipelineStore = await getPipelinePresetStore(conf, { preferCache: true });
+      trace?.mark(hadPipelineStoreCache ? 'getPipelinePresetStore cache hit' : 'getPipelinePresetStore fresh load');
       const pipeline = normalizePipelineConfig(getActivePipelinePreset(pipelineStore)?.pipeline || defaultPipelineConfig(), conf.modelPresets);
       trace?.mark('pipeline normalized');
       document.body.innerHTML = buildLiteUI(conf, pipeline, pipelineStore);
@@ -4511,18 +4590,33 @@
       const trace = normalizeShortcutTraceArg(traceArg);
       trace?.mark('openRunInspector entered');
       console.log('Agents! opening run inspector');
-      const conf = await getConfig();
-      trace?.mark('getConfig');
-      const pipeline = await getPipelineConfig(conf);
-      trace?.mark('getPipelineConfig');
-      const runLog = await loadCurrentRunLog(conf.debugLog, conf.runLogEnabled);
-      trace?.mark('loadCurrentRunLog');
-      document.body.innerHTML = buildRunInspectorUI(pipeline, runLog);
+      const conf = await getCachedConfig(trace);
+      const hadPipelineStoreCache = Boolean(pipelinePresetStoreCache);
+      const pipeline = await getPipelineConfig(conf, { preferCache: true });
+      trace?.mark(hadPipelineStoreCache ? 'getPipelineConfig cache hit' : 'getPipelineConfig fresh load');
+      const loadingRunLog = createLoadingRunLog(conf);
+      const loadSeq = ++runInspectorLoadSeq;
+      document.body.innerHTML = buildRunInspectorUI(pipeline, loadingRunLog);
       trace?.mark('HTML generated');
-      setupRunInspectorHandlers(conf, pipeline, runLog);
+      setupRunInspectorHandlers(conf, pipeline, loadingRunLog);
       trace?.mark('handlers setup');
       await Risuai.showContainer('fullscreen');
       trace?.mark('showContainer complete');
+      loadCurrentRunLog(conf.debugLog, conf.runLogEnabled)
+        .then((runLog) => {
+          if (loadSeq !== runInspectorLoadSeq) return;
+          trace?.mark('loadCurrentRunLog async complete');
+          document.body.innerHTML = buildRunInspectorUI(pipeline, runLog);
+          setupRunInspectorHandlers(conf, pipeline, runLog);
+          trace?.mark('Run Inspector refreshed');
+        })
+        .catch((err) => {
+          if (loadSeq !== runInspectorLoadSeq) return;
+          trace?.fail('loadCurrentRunLog async failed', err);
+          const failedRunLog = createRunInspectorLoadFailedLog(conf, err);
+          document.body.innerHTML = buildRunInspectorUI(pipeline, failedRunLog);
+          setupRunInspectorHandlers(conf, pipeline, failedRunLog);
+        });
     }
 
     const menuIcon = '🧠';
@@ -4581,6 +4675,9 @@
     async function registerGlobalShortcutHandler() {
       try {
         const conf = await getConfig();
+        await getPipelinePresetStore(conf, { preferCache: true }).catch((err) => {
+          if (conf?.debugLog) console.log(`Agents! pipeline preset cache warmup failed: ${err.message}`);
+        });
         updateShortcutCache(conf.shortcuts);
         const rootDoc = await Risuai.getRootDocument();
         const rootBody = await getRootBodyElement(rootDoc);
@@ -4589,6 +4686,7 @@
         const registration = await addShortcutListener(rootDoc, rootBody);
         const listenerId = registration.id;
         await Risuai.safeLocalStorage.setItem(SHORTCUT_LISTENER_STORAGE_KEY, listenerId).catch(() => {});
+        registerIframeShortcutListener();
         console.log(`Agents! shortcuts registered on ${registration.target}`, shortcutConfigCache);
       } catch (err) {
         console.log(`Agents! shortcut registration failed: ${err.message}`);
@@ -4674,6 +4772,16 @@
 
       const id = await rootDoc.addEventListener('keydown', handleGlobalShortcutKeydown);
       return { id, target: 'root document' };
+    }
+
+    function registerIframeShortcutListener() {
+      try {
+        document.removeEventListener('keydown', handleGlobalShortcutKeydown, true);
+        document.addEventListener('keydown', handleGlobalShortcutKeydown, true);
+        if (shortcutDebugLogCache) console.log('Agents! shortcuts registered on plugin iframe document');
+      } catch (err) {
+        console.log(`Agents! iframe shortcut registration failed: ${err.message}`);
+      }
     }
 
     function updateShortcutCache(shortcuts) {
@@ -5097,6 +5205,46 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 </body></html>`;
     }
 
+    function createLoadingRunLog(conf) {
+      return {
+        version: RUN_LOG_VERSION,
+        status: 'loading',
+        reason: '최근 실행 결과 로딩 중',
+        characterName: '(불러오는 중)',
+        chatName: '(불러오는 중)',
+        chatIndex: '',
+        chatKey: '',
+        chatKeyDisplay: '',
+        chatKeySource: '',
+        chatScopeAvailable: true,
+        chatScopeError: '',
+        preResults: [],
+        postResults: [],
+        notes: [],
+        runLogEnabled: conf?.runLogEnabled === true,
+      };
+    }
+
+    function createRunInspectorLoadFailedLog(conf, err) {
+      return {
+        version: RUN_LOG_VERSION,
+        status: 'load-failed',
+        reason: err?.message || 'unknown error',
+        characterName: '(알 수 없는 캐릭터)',
+        chatName: '(알 수 없는 채팅방)',
+        chatIndex: '',
+        chatKey: '',
+        chatKeyDisplay: '',
+        chatKeySource: '',
+        chatScopeAvailable: false,
+        chatScopeError: err?.message || 'unknown error',
+        preResults: [],
+        postResults: [],
+        notes: [],
+        runLogEnabled: conf?.runLogEnabled === true,
+      };
+    }
+
     function setupRunInspectorHandlers(conf, pipeline, runLog) {
       let selectedAgentId = findDefaultInspectorAgentId(pipeline, runLog);
       renderInspectorRows();
@@ -5212,6 +5360,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     function runSummaryText(runLog) {
       if (!runLog || runLog.status === 'no-run') return '아직 이 채팅에서 실행된 Agents! 결과가 없습니다.';
+      if (runLog.status === 'loading') return '최근 실행 결과를 불러오는 중입니다.';
       if (runLog.status === 'chat-scope-unavailable') return `채팅방 고유 스코프를 만들지 못했습니다: ${runLog.reason || 'chat id unavailable'}`;
       if (runLog.status === 'load-failed') return `최근 실행 결과를 불러오지 못했습니다: ${runLog.reason || 'unknown error'}`;
       const time = runLog.updatedAt || runLog.timestamp;
