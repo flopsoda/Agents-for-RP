@@ -5468,21 +5468,32 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       if (agent.mode === 'post') {
         return `<h2>${escHtml(agent.name)}</h2>${meta}
-          ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
           ${runLogDetailBlockHtml('입력 응답', result, 'inputResponse', '(입력 응답 없음)')}
-          ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
           ${runLogDetailBlockHtml('적용 후 응답', result, 'outputResponse', '(적용 후 응답 없음)')}
+          ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
+          ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
           ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
 
+      const memoryUpdateBlock = agent.memoryEnabled
+        ? runLogDetailBlockHtml('갱신된 기억', result, 'memoryUpdate', memoryUpdateFallbackText(result))
+        : '';
       return `<h2>${escHtml(agent.name)}</h2>${meta}
         ${memoryButton}
-        ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('생성된 Note', result, 'content', '(노트 없음)')}
+        ${memoryUpdateBlock}
+        ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', '(원본 출력 없음)', { fallbackField: 'content' })}
         ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
+    }
+
+    function memoryUpdateFallbackText(result) {
+      const status = result?.memoryStatus && result.memoryStatus !== 'disabled'
+        ? memoryStatusLabel(result.memoryStatus)
+        : '';
+      return status ? `(기억 갱신 없음 - ${status})` : '(기억 갱신 없음)';
     }
 
     function memoryInspectorButtonHtml(agent) {
@@ -5676,7 +5687,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     function runLogDetailBlockHtml(title, source, field, fallback = '', options = {}) {
       const bodyKey = source?.[`${field}BodyKey`];
       const fallbackField = options.fallbackField || '';
-      const sealed = options.sealed === true || field === 'prompt' || field === 'rawOutput';
+      const sealed = options.sealed === true || field === 'prompt' || field === 'rawOutput' || field === 'inputResponse';
       const inlineText = runLogModalFieldValue(source, field, fallback, fallbackField);
       const meta = runLogDetailMetaHtml(source, field, inlineText, bodyKey, fallbackField);
       const button = runLogFullTextButtonHtml(title, field, bodyKey, fallback, fallbackField);
