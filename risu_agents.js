@@ -4585,6 +4585,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .editor-empty,.empty{color:var(--muted);font-size:.84rem;padding:13px;border:1px dashed var(--line-strong);border-radius:8px;background:#121212}
 .checkline{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:#d0d0d0;font-size:.78rem}.checkline input{width:auto;accent-color:var(--red)}
 .memory-settings,.detail-block,.prompt-preview-block{border:1px solid var(--line);background:#121212;border-radius:7px;padding:11px;margin-top:10px}
+.detail-block.sealed-detail{background:#101010}
 .mini-actions,.detail-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
 .mini-actions button{border-radius:8px}
 .danger{border-color:rgba(255,93,93,.55);background:rgba(255,93,93,.12);color:#ffb0b0}.danger:hover{background:rgba(255,93,93,.2)}
@@ -4597,14 +4598,17 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .run-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
 .detail-meta{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}
 .detail-block h3,.prompt-preview-block h3{font-size:.78rem;color:#ddd;margin-bottom:7px}
+.sealed-detail-note{font-size:.78rem;color:var(--muted);margin-top:6px}
 .detail-block pre,.prompt-preview-block pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#f5f5f5}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:40;display:flex;align-items:center;justify-content:center;padding:18px}
-.prompt-modal,.memory-modal{width:min(920px,100%);max-height:88vh;overflow:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54)}
+.prompt-modal,.memory-modal,.run-log-modal{width:min(920px,100%);max-height:88vh;overflow:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54)}
+.run-log-modal{width:min(1080px,100%);overflow:hidden;display:flex;flex-direction:column}
 .confirm-modal{width:min(440px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54);padding:16px}
 .confirm-modal h2{font-size:1rem;margin-bottom:8px}.confirm-modal p{font-size:.86rem;color:#d6d6d6;overflow-wrap:anywhere}.confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
-.prompt-modal{padding:16px}.prompt-modal-head,.memory-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.prompt-modal-head{margin-bottom:12px}.memory-modal-head{border-bottom:1px solid var(--line);padding:14px 16px}.memory-modal-head h2{font-size:1rem;margin:0 0 4px}.memory-modal-body{padding:14px 16px 18px}
-.prompt-preview-meta,.memory-snapshot-meta{font-size:.76rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+.prompt-modal{padding:16px}.prompt-modal-head,.memory-modal-head,.run-log-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.prompt-modal-head{margin-bottom:12px}.memory-modal-head,.run-log-modal-head{border-bottom:1px solid var(--line);padding:14px 16px}.memory-modal-head h2,.run-log-modal-head h2{font-size:1rem;margin:0 0 4px}.memory-modal-body{padding:14px 16px 18px}
+.run-log-modal-body{padding:14px 16px 18px;overflow:auto;min-height:0}.run-log-modal-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#f5f5f5}
+.prompt-preview-meta,.memory-snapshot-meta,.run-log-modal-meta{font-size:.76rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
 .memory-snapshot{padding:11px}.memory-snapshot.current{border-color:var(--red);background:var(--red-soft)}
 .memory-snapshot-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}.memory-snapshot-title{font-size:.82rem;font-weight:800}
 .actions{position:fixed;left:0;right:0;bottom:0;background:rgba(15,15,15,.97);border-top:1px solid var(--line);padding:10px 16px;z-index:12}
@@ -4613,7 +4617,7 @@ button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}}
+@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
 `;
     }
 
@@ -4737,15 +4741,38 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const targetAgent = findAgentById(pipeline, event.currentTarget.getAttribute('data-memory-stack-agent-id'));
           if (targetAgent) await openMemoryStackModal(targetAgent, conf);
         });
-        root.querySelectorAll('[data-run-log-body-key]').forEach(button => {
+        root.querySelectorAll('[data-run-log-field]').forEach(button => {
           button.addEventListener('click', async (event) => {
-            const key = event.currentTarget.getAttribute('data-run-log-body-key');
-            const targetId = event.currentTarget.getAttribute('data-run-log-body-target');
-            const target = targetId ? document.getElementById(targetId) : null;
-            if (!key || !target) return;
-            target.innerHTML = '<pre>전문을 불러오는 중...</pre>';
-            const value = await loadRunLogBodyValue(key, conf?.debugLog);
-            target.innerHTML = `<pre>${escHtml(value || '(본문 없음)')}</pre>`;
+            const field = event.currentTarget.getAttribute('data-run-log-field');
+            const title = event.currentTarget.getAttribute('data-run-log-title') || '전문';
+            const bodyKey = event.currentTarget.getAttribute('data-run-log-body-key') || '';
+            const fallback = event.currentTarget.getAttribute('data-run-log-fallback') || '';
+            const fallbackField = event.currentTarget.getAttribute('data-run-log-fallback-field') || '';
+            const currentAgent = findAgentById(pipeline, selectedAgentId);
+            const currentResult = findRunResultForAgent(runLog, currentAgent);
+            if (!field || !currentAgent || !currentResult) return;
+
+            const buttonEl = event.currentTarget;
+            const previousText = buttonEl.textContent;
+            buttonEl.disabled = true;
+            buttonEl.textContent = '불러오는 중...';
+            try {
+              const storedText = bodyKey ? await loadRunLogBodyValue(bodyKey, conf?.debugLog) : '';
+              const text = storedText || runLogModalFieldValue(currentResult, field, fallback, fallbackField);
+              openRunLogTextModal({
+                title,
+                agent: currentAgent,
+                result: currentResult,
+                field,
+                text: text || fallback || '(본문 없음)',
+                bodyKey,
+                hasInline: runLogHasInlineText(currentResult, field, fallbackField),
+                chars: currentResult?.[`${field}Chars`],
+              });
+            } finally {
+              buttonEl.disabled = false;
+              buttonEl.textContent = previousText;
+            }
           });
         });
       }
@@ -4862,7 +4889,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${memoryButton}
         ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('생성된 Note', result, 'content', '(노트 없음)')}
-        ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', runLogFieldValue(result, 'content', '(원본 출력 없음)'))}
+        ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', '(원본 출력 없음)', { fallbackField: 'content' })}
         ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
     }
@@ -4972,6 +4999,50 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return `<div class="detail-block"><h3>${escHtml(title)}</h3><pre>${escHtml(text)}</pre></div>`;
     }
 
+    function openRunLogTextModal(options) {
+      closeRunLogTextModal();
+      document.body.insertAdjacentHTML('beforeend', runLogTextModalHtml(options));
+      document.getElementById('run-log-text-close')?.addEventListener('click', closeRunLogTextModal);
+      document.getElementById('run-log-text-modal')?.addEventListener('click', (event) => {
+        if (event.target?.id === 'run-log-text-modal') closeRunLogTextModal();
+      });
+      document.addEventListener('keydown', handleRunLogTextModalKeydown);
+      document.getElementById('run-log-text-close')?.focus();
+    }
+
+    function closeRunLogTextModal() {
+      document.getElementById('run-log-text-modal')?.remove();
+      document.removeEventListener('keydown', handleRunLogTextModalKeydown);
+    }
+
+    function handleRunLogTextModalKeydown(event) {
+      if (event.key === 'Escape') closeRunLogTextModal();
+    }
+
+    function runLogTextModalHtml(options) {
+      const title = String(options?.title || '전문');
+      const agent = options?.agent || {};
+      const result = options?.result || {};
+      const text = String(options?.text || '');
+      const modeLabel = agent.mode === 'post' ? 'Post-Agent' : 'Pre-Agent';
+      const postMode = agent.mode === 'post' ? ` · ${postModeLabel(result?.postMode || agent.postMode)}` : '';
+      const charCount = runLogTextChars(result, options?.field || '', text);
+      const storageState = options?.bodyKey ? '본문 저장됨' : (options?.hasInline ? '인라인 저장됨' : '본문 없음');
+      const meta = `Row ${agent.row !== undefined ? agent.row + 1 : '?'} · ${modeLabel}${postMode} · 전문 ${charCount}자 · ${storageState}`;
+      return `<div id="run-log-text-modal" class="modal-backdrop">
+        <div class="run-log-modal" role="dialog" aria-modal="true" aria-labelledby="run-log-text-title">
+          <div class="run-log-modal-head">
+            <div>
+              <h2 id="run-log-text-title">${escHtml(title)}</h2>
+              <div class="run-log-modal-meta">${escHtml(agent.name || '(이름 없음)')} · ${escHtml(meta)}</div>
+            </div>
+            <button id="run-log-text-close" class="ghost">닫기</button>
+          </div>
+          <div class="run-log-modal-body"><pre>${escHtml(text || '(본문 없음)')}</pre></div>
+        </div>
+      </div>`;
+    }
+
     function runLogFieldValue(source, field, fallback = '') {
       if (source?.[field] !== undefined && source?.[field] !== null) return String(source[field]);
       const preview = source?.[`${field}Preview`];
@@ -4979,22 +5050,64 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return String(fallback || '');
     }
 
-    function runLogDetailBlockHtml(title, source, field, fallback = '') {
+    function runLogModalFieldValue(source, field, fallback = '', fallbackField = '') {
+      if (source?.[field] !== undefined && source?.[field] !== null) return String(source[field]);
+      const preview = source?.[`${field}Preview`];
+      if (preview !== undefined && preview !== null) return String(preview);
+      if (fallbackField) return runLogFieldValue(source, fallbackField, fallback);
+      return String(fallback || '');
+    }
+
+    function runLogHasInlineText(source, field, fallbackField = '') {
+      return source?.[field] !== undefined && source?.[field] !== null
+        || source?.[`${field}Preview`] !== undefined && source?.[`${field}Preview`] !== null
+        || Boolean(fallbackField && (
+          source?.[fallbackField] !== undefined && source?.[fallbackField] !== null
+          || source?.[`${fallbackField}Preview`] !== undefined && source?.[`${fallbackField}Preview`] !== null
+        ));
+    }
+
+    function runLogTextChars(source, field, fallbackText = '') {
+      const chars = Number(source?.[`${field}Chars`]);
+      return Number.isFinite(chars) && chars >= 0 ? chars : String(fallbackText || '').length;
+    }
+
+    function runLogDetailMetaHtml(source, field, text, bodyKey, fallbackField = '') {
+      const chars = runLogTextChars(source, field, text);
+      const state = bodyKey ? '본문 저장됨' : (runLogHasInlineText(source, field, fallbackField) ? '인라인 저장됨' : '본문 없음');
+      return `<div class="metric-sub">전문 ${escHtml(chars)}자 · ${escHtml(state)}</div>`;
+    }
+
+    function runLogFullTextButtonHtml(title, field, bodyKey, fallback = '', fallbackField = '') {
+      return `<div class="detail-actions"><button class="ghost" data-run-log-field="${escHtml(field)}" data-run-log-title="${escHtml(title)}" data-run-log-body-key="${escHtml(bodyKey || '')}" data-run-log-fallback="${escHtml(fallback)}" data-run-log-fallback-field="${escHtml(fallbackField)}">전문 보기</button></div>`;
+    }
+
+    function runLogDetailBlockHtml(title, source, field, fallback = '', options = {}) {
       const bodyKey = source?.[`${field}BodyKey`];
-      const chars = source?.[`${field}Chars`];
+      const fallbackField = options.fallbackField || '';
+      const sealed = options.sealed === true || field === 'prompt' || field === 'rawOutput';
+      const inlineText = runLogModalFieldValue(source, field, fallback, fallbackField);
+      const meta = runLogDetailMetaHtml(source, field, inlineText, bodyKey, fallbackField);
+      const button = runLogFullTextButtonHtml(title, field, bodyKey, fallback, fallbackField);
+      if (sealed) {
+        return `<div class="detail-block sealed-detail">
+          <h3>${escHtml(title)}</h3>
+          ${meta}
+          <div class="sealed-detail-note">미리보기 숨김</div>
+          ${button}
+        </div>`;
+      }
+
       if (!bodyKey) {
-        return detailBlockHtml(title, runLogFieldValue(source, field, fallback));
+        return detailBlockHtml(title, inlineText);
       }
 
       const preview = runLogFieldValue(source, field, fallback);
-      const targetId = `run-log-body-${sanitizeMemoryKeyPart(`${source?.id || source?.name || title}-${field}`)}`;
-      const meta = Number.isFinite(Number(chars)) ? `<div class="metric-sub">전문 ${escHtml(chars)}자</div>` : '';
       return `<div class="detail-block">
         <h3>${escHtml(title)}</h3>
         ${meta}
         <pre>${escHtml(preview || '(미리보기 없음)')}</pre>
-        <div class="detail-actions"><button class="ghost" data-run-log-body-key="${escHtml(bodyKey)}" data-run-log-body-target="${escHtml(targetId)}">전문 보기</button></div>
-        <div id="${escHtml(targetId)}"></div>
+        ${button}
       </div>`;
     }
 
