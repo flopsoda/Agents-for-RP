@@ -68,6 +68,11 @@
     const SETTINGS_UI_ID = 'risu-agents-settings';
     const HAMBURGER_UI_ID = 'risu-agents-hamburger';
     const CHAT_UI_ID = 'risu-agents-chat';
+    const SHORTCUT_LISTENER_STORAGE_KEY = 'risu_agents_shortcut_listener_id_v1';
+    const DEFAULT_SHORTCUTS = {
+      settings: 'F4',
+      runInspector: 'F6',
+    };
     const AGENT_LLM_TIMEOUT_MS = 120000;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
@@ -145,6 +150,9 @@
     const AGENTS_CONFIG_VAULT_KEY = 'risu_agents_config_vault_v1';
     const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
+    let shortcutConfigCache = normalizeShortcutConfig(null);
+    let shortcutOpenInFlight = false;
+    let shortcutLastOpenedAt = 0;
 
     // ── 설정 로드 ─────────────────────────────────────────────────────────────
 
@@ -164,6 +172,7 @@
       const proxyUrl = normalizeProxyUrl(preferArgumentValue(await Risuai.getArgument('agents_proxy_url'), vault.proxyUrl || ''));
       const proxyKey = String(preferArgumentValue(await Risuai.getArgument('agents_proxy_key'), vault.proxyKey || '')).trim();
       const proxyDirect = parseBool(preferArgumentValue(await Risuai.getArgument('agents_proxy_direct'), vault.proxyDirect ?? false), false);
+      const shortcuts = normalizeShortcutConfig(vault.shortcuts);
       const fallbackConfig = {
         provider,
         baseUrl,
@@ -219,6 +228,7 @@
         proxyUrl,
         proxyKey,
         proxyDirect,
+        shortcuts,
         pipeline,
         pipelinePresetStore: vault.pipelinePresetStore || null,
       };
@@ -301,6 +311,7 @@
         proxyUrl: normalizeProxyUrl(conf?.proxyUrl || ''),
         proxyKey: String(conf?.proxyKey || ''),
         proxyDirect: conf?.proxyDirect === true,
+        shortcuts: normalizeShortcutConfig(conf?.shortcuts),
         modelPresets,
         providerKeys,
         pipeline: activePipeline ? normalizePipelineConfig(activePipeline, modelPresets) : null,
@@ -4497,6 +4508,7 @@
     const menuIcon = '🧠';
 
     await registerLiteUIEntrypoints();
+    await registerGlobalShortcutHandler();
 
     async function registerLiteUIEntrypoints() {
       await unregisterKnownUIPart(SETTINGS_UI_ID);
@@ -4544,6 +4556,233 @@
       } catch (_) {
         // 없는 항목이면 무시합니다.
       }
+    }
+
+    async function registerGlobalShortcutHandler() {
+      try {
+        const conf = await getConfig();
+        shortcutConfigCache = normalizeShortcutConfig(conf.shortcuts);
+        const rootDoc = await Risuai.getRootDocument();
+        const previousId = await Risuai.safeLocalStorage.getItem(SHORTCUT_LISTENER_STORAGE_KEY).catch(() => '');
+        if (previousId) {
+          await rootDoc.removeEventListener('keydown', previousId).catch(() => {});
+        }
+        const listenerId = await rootDoc.addEventListener('keydown', handleGlobalShortcutKeydown);
+        await Risuai.safeLocalStorage.setItem(SHORTCUT_LISTENER_STORAGE_KEY, listenerId).catch(() => {});
+        console.log('Agents! shortcuts registered', shortcutConfigCache);
+      } catch (err) {
+        console.log(`Agents! shortcut registration failed: ${err.message}`);
+      }
+    }
+
+    async function handleGlobalShortcutKeydown(event) {
+      try {
+        if (event?.repeat === true) return;
+        const shortcut = normalizeShortcutEvent(event);
+        if (!shortcut) return;
+        if (await isEditableShortcutTarget(event) && !isFunctionKeyShortcut(shortcut)) return;
+
+        const shortcuts = normalizeShortcutConfig(shortcutConfigCache);
+        let action = '';
+        if (shortcuts.settings && shortcut === shortcuts.settings) action = 'settings';
+        if (shortcuts.runInspector && shortcut === shortcuts.runInspector) action = 'runInspector';
+        if (!action) return;
+
+        if (typeof event?.preventDefault === 'function') event.preventDefault();
+        if (typeof event?.stopPropagation === 'function') event.stopPropagation();
+
+        const now = Date.now();
+        if (shortcutOpenInFlight || now - shortcutLastOpenedAt < 450) return;
+        shortcutOpenInFlight = true;
+        shortcutLastOpenedAt = now;
+        if (action === 'settings') {
+          await openLiteDashboard();
+        } else {
+          await openRunInspector();
+        }
+      } catch (err) {
+        console.log(`Agents! shortcut handler failed: ${err.message}`);
+      } finally {
+        shortcutOpenInFlight = false;
+      }
+    }
+
+    async function isEditableShortcutTarget(event) {
+      const target = event?.target || null;
+      if (!target) return false;
+
+      let nodeName = '';
+      for (const prop of ['tagName', 'nodeName', 'localName']) {
+        if (typeof target[prop] === 'string') {
+          nodeName = target[prop].toLowerCase();
+          break;
+        }
+      }
+      if (!nodeName && typeof target.nodeName === 'function') {
+        nodeName = String(await target.nodeName().catch(() => '') || '').toLowerCase();
+      }
+      if (['input', 'textarea', 'select', 'option'].includes(nodeName)) return true;
+
+      const role = String(target.role || '').toLowerCase();
+      if (['textbox', 'combobox', 'searchbox'].includes(role)) return true;
+      if (target.isContentEditable === true) return true;
+      if (String(target.contentEditable || '').toLowerCase() === 'true') return true;
+      return false;
+    }
+
+    function normalizeShortcutConfig(value) {
+      const source = isPlainObject(value) ? value : {};
+      return {
+        settings: normalizeShortcutString(
+          Object.prototype.hasOwnProperty.call(source, 'settings') ? source.settings : DEFAULT_SHORTCUTS.settings,
+          DEFAULT_SHORTCUTS.settings,
+        ),
+        runInspector: normalizeShortcutString(
+          Object.prototype.hasOwnProperty.call(source, 'runInspector') ? source.runInspector : DEFAULT_SHORTCUTS.runInspector,
+          DEFAULT_SHORTCUTS.runInspector,
+        ),
+      };
+    }
+
+    function validateShortcutConfig(shortcuts) {
+      const normalized = normalizeShortcutConfig(shortcuts);
+      if (normalized.settings && normalized.settings === normalized.runInspector) {
+        return 'Agents! 설정과 Run Inspector 단축키가 같습니다.';
+      }
+      return '';
+    }
+
+    function normalizeShortcutString(value, fallback = '') {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      const parts = raw.split('+').map(part => part.trim()).filter(Boolean);
+      const modifiers = {
+        Ctrl: false,
+        Alt: false,
+        Shift: false,
+        Meta: false,
+      };
+      let key = '';
+
+      for (const part of parts) {
+        const modifier = normalizeShortcutModifier(part);
+        if (modifier) {
+          modifiers[modifier] = true;
+          continue;
+        }
+        const nextKey = normalizeShortcutKeyName(part);
+        if (!nextKey || isShortcutModifierKey(nextKey) || key) return fallback;
+        key = nextKey;
+      }
+
+      if (!key) return fallback;
+      const shortcut = formatShortcut(modifiers, key);
+      return getShortcutRejectionReason(shortcut) ? fallback : shortcut;
+    }
+
+    function normalizeShortcutEvent(event) {
+      const key = normalizeShortcutKeyName(event?.key || event?.code || '');
+      if (!key || isShortcutModifierKey(key)) return '';
+      return formatShortcut({
+        Ctrl: event?.ctrlKey === true,
+        Alt: event?.altKey === true,
+        Shift: event?.shiftKey === true,
+        Meta: event?.metaKey === true,
+      }, key);
+    }
+
+    function normalizeShortcutModifier(value) {
+      const raw = String(value || '').trim().toLowerCase();
+      if (raw === 'ctrl' || raw === 'control') return 'Ctrl';
+      if (raw === 'alt' || raw === 'option') return 'Alt';
+      if (raw === 'shift') return 'Shift';
+      if (raw === 'meta' || raw === 'cmd' || raw === 'command') return 'Meta';
+      return '';
+    }
+
+    function normalizeShortcutKeyName(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const modifier = normalizeShortcutModifier(raw);
+      if (modifier) return modifier;
+      const lower = raw.toLowerCase();
+      if (/^key[a-z]$/i.test(raw)) return raw.slice(3).toUpperCase();
+      if (/^digit[0-9]$/i.test(raw)) return raw.slice(5);
+      if (/^numpad[0-9]$/i.test(raw)) return `Numpad${raw.slice(6)}`;
+      if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(raw)) return `F${parseInt(raw.slice(1), 10)}`;
+      if (raw.length === 1) return raw.toUpperCase();
+      const named = {
+        esc: 'Escape',
+        escape: 'Escape',
+        tab: 'Tab',
+        enter: 'Enter',
+        return: 'Enter',
+        space: 'Space',
+        spacebar: 'Space',
+        ' ': 'Space',
+        backspace: 'Backspace',
+        delete: 'Delete',
+        del: 'Delete',
+        insert: 'Insert',
+        home: 'Home',
+        end: 'End',
+        pageup: 'PageUp',
+        pagedown: 'PageDown',
+        arrowup: 'ArrowUp',
+        up: 'ArrowUp',
+        arrowdown: 'ArrowDown',
+        down: 'ArrowDown',
+        arrowleft: 'ArrowLeft',
+        left: 'ArrowLeft',
+        arrowright: 'ArrowRight',
+        right: 'ArrowRight',
+      };
+      return named[lower] || raw;
+    }
+
+    function isShortcutModifierKey(key) {
+      return ['Ctrl', 'Alt', 'Shift', 'Meta'].includes(key);
+    }
+
+    function isFunctionKeyShortcut(shortcut) {
+      const key = String(shortcut || '').split('+').pop();
+      return /^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+    }
+
+    function formatShortcut(modifiers, key) {
+      const parts = [];
+      if (modifiers.Ctrl) parts.push('Ctrl');
+      if (modifiers.Alt) parts.push('Alt');
+      if (modifiers.Shift) parts.push('Shift');
+      if (modifiers.Meta) parts.push('Meta');
+      parts.push(key);
+      return parts.join('+');
+    }
+
+    function getShortcutRejectionReason(shortcut) {
+      if (!shortcut) return '수정키만으로는 단축키를 지정할 수 없습니다.';
+      const reserved = {
+        Escape: 'Escape는 단축키 지정 취소에 사용합니다.',
+        Tab: 'Tab은 포커스 이동과 충돌해서 지정할 수 없습니다.',
+        F5: 'F5는 새로고침과 충돌해서 지정할 수 없습니다.',
+        F12: 'F12는 개발자 도구와 충돌해서 지정할 수 없습니다.',
+        'Alt+F4': 'Alt+F4는 창 닫기와 충돌해서 지정할 수 없습니다.',
+        'Ctrl+R': 'Ctrl+R은 새로고침과 충돌해서 지정할 수 없습니다.',
+        'Meta+R': 'Meta+R은 새로고침과 충돌해서 지정할 수 없습니다.',
+        'Ctrl+W': 'Ctrl+W는 탭 닫기와 충돌해서 지정할 수 없습니다.',
+        'Meta+W': 'Meta+W는 탭 닫기와 충돌해서 지정할 수 없습니다.',
+        'Ctrl+L': 'Ctrl+L은 주소창 이동과 충돌해서 지정할 수 없습니다.',
+        'Meta+L': 'Meta+L은 주소창 이동과 충돌해서 지정할 수 없습니다.',
+      };
+      return reserved[shortcut] || '';
+    }
+
+    function shortcutInputId(action) {
+      return action === 'runInspector' ? 'agents_shortcut_run_inspector' : 'agents_shortcut_settings';
+    }
+
+    function shortcutActionLabel(action) {
+      return action === 'runInspector' ? 'Run Inspector' : 'Agents! 설정';
     }
 
     function youtubeThemeStyles() {
@@ -4611,6 +4850,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .model-custom-input{display:none;margin-top:8px}
 .model-custom-active .model-custom-input{display:block}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.shortcut-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.shortcut-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.shortcut-actions button{border-radius:8px;padding:9px 10px}
 .example-url{font-size:.73rem;color:var(--muted);background:#121212;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:-3px 0 10px;overflow-wrap:anywhere}
 .msg{font-size:.82rem;padding:10px 12px;border-radius:8px;margin-bottom:12px;display:none}
 .msg.ok{display:block;background:rgba(43,166,64,.16);color:#83e79b;border:1px solid rgba(43,166,64,.55)}
@@ -4686,7 +4928,7 @@ button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
+@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.shortcut-row,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.shortcut-actions{justify-content:flex-start}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
 `;
     }
 
@@ -5244,6 +5486,31 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           <option value="false" ${!conf.bypassAuxRequests ? 'selected' : ''}>꺼짐 - 모든 요청에 Agents! 실행</option>
         </select>
       </div>
+      <div class="row2">
+        <div class="field">
+          <label for="agents_shortcut_settings">Agents! 설정 단축키</label>
+          <div class="shortcut-row">
+            <input id="agents_shortcut_settings" type="text" value="${escHtml(conf.shortcuts?.settings || '')}" placeholder="비활성" readonly>
+            <div class="shortcut-actions">
+              <button type="button" data-shortcut-capture="settings">지정</button>
+              <button type="button" data-shortcut-default="settings">기본값</button>
+              <button type="button" data-shortcut-clear="settings">비우기</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="agents_shortcut_run_inspector">Run Inspector 단축키</label>
+          <div class="shortcut-row">
+            <input id="agents_shortcut_run_inspector" type="text" value="${escHtml(conf.shortcuts?.runInspector || '')}" placeholder="비활성" readonly>
+            <div class="shortcut-actions">
+              <button type="button" data-shortcut-capture="runInspector">지정</button>
+              <button type="button" data-shortcut-default="runInspector">기본값</button>
+              <button type="button" data-shortcut-clear="runInspector">비우기</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="example-url">지정 버튼을 누른 뒤 단축키를 입력하세요. Escape는 취소, 비우기는 해당 단축키 비활성입니다.</div>
       <div class="field">
         <label for="agents_extra_body_json">전역 추가 JSON body</label>
         <textarea id="agents_extra_body_json" spellcheck="false" placeholder='{}'>${escHtml(conf.extraBodyJson)}</textarea>
@@ -5318,11 +5585,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       document.getElementById('run-inspector-tab-btn')?.addEventListener('click', openRunInspector);
       document.getElementById('preset-add-btn')?.addEventListener('click', addModelPreset);
+      setupShortcutControls();
       document.getElementById('save-btn')?.addEventListener('click', async () => {
         try {
           syncActivePipelinePreset();
           const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState, pipelinePresetStoreState);
+          const shortcutError = validateShortcutConfig(next.shortcuts);
+          if (shortcutError) throw new Error(shortcutError);
           await saveLiteConfig(next);
+          shortcutConfigCache = normalizeShortcutConfig(next.shortcuts);
           pipelinePresetStoreState = next.pipelinePresetStore;
           activePipelinePresetId = pipelinePresetStoreState.activePresetId;
           providerKeysState = { ...(next.providerKeys || {}) };
@@ -5336,6 +5607,75 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('close-btn')?.addEventListener('click', async () => {
           await Risuai.hideContainer();
       });
+
+      function setupShortcutControls() {
+        let stopCapture = null;
+        document.querySelectorAll('[data-shortcut-capture]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const action = button.getAttribute('data-shortcut-capture');
+            const input = document.getElementById(shortcutInputId(action));
+            if (!input) return;
+            if (stopCapture) stopCapture();
+            const previousText = button.textContent;
+            button.textContent = '입력 중';
+            showMsg('단축키를 입력하세요. Escape로 취소할 수 있습니다.', true);
+
+            const onKeydown = (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.key === 'Escape') {
+                cleanup();
+                showMsg('단축키 지정을 취소했습니다.', true);
+                return;
+              }
+
+              const shortcut = normalizeShortcutEvent(event);
+              if (!shortcut) {
+                showMsg('수정키와 함께 사용할 키를 눌러주세요.', true);
+                return;
+              }
+              const rejection = getShortcutRejectionReason(shortcut);
+              if (rejection) {
+                cleanup();
+                showMsg(rejection, false);
+                return;
+              }
+
+              input.value = shortcut;
+              cleanup();
+              showMsg(`${shortcutActionLabel(action)} 단축키: ${shortcut}`, true);
+            };
+
+            const cleanup = () => {
+              document.removeEventListener('keydown', onKeydown, true);
+              button.textContent = previousText;
+              stopCapture = null;
+            };
+
+            stopCapture = cleanup;
+            document.addEventListener('keydown', onKeydown, true);
+          });
+        });
+
+        document.querySelectorAll('[data-shortcut-default]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const action = button.getAttribute('data-shortcut-default');
+            setShortcutInputValue(action, DEFAULT_SHORTCUTS[action] || '');
+          });
+        });
+
+        document.querySelectorAll('[data-shortcut-clear]').forEach((button) => {
+          button.addEventListener('click', () => {
+            setShortcutInputValue(button.getAttribute('data-shortcut-clear'), '');
+          });
+        });
+      }
+
+      function setShortcutInputValue(action, value) {
+        const input = document.getElementById(shortcutInputId(action));
+        if (!input) return;
+        input.value = normalizeShortcutString(value, '');
+      }
 
       function syncActivePipelinePreset() {
         const active = pipelinePresetStoreState.presets.find(preset => preset.id === activePipelinePresetId) || pipelinePresetStoreState.presets[0];
@@ -6303,6 +6643,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         debugLog: parseBool(getInputValue('agents_debug_log'), false),
         runLogEnabled: initialConf.runLogEnabled === true,
         bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
+        shortcuts: normalizeShortcutConfig({
+          settings: getInputValue('agents_shortcut_settings'),
+          runInspector: getInputValue('agents_shortcut_run_inspector'),
+        }),
         extraBodyJson: normalizeExtraBodyJson(getInputValue('agents_extra_body_json')),
         proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
         proxyKey: getInputValue('agents_proxy_key') || initialConf.proxyKey || '',
