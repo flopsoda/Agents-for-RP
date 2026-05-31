@@ -4539,13 +4539,8 @@ label{display:block;font-size:.75rem;color:var(--muted);margin-bottom:5px}
 input,select,textarea{width:100%;padding:10px 11px;border-radius:6px;border:1px solid var(--line-strong);background:#121212;color:var(--text);font-size:.86rem}
 textarea{min-height:96px;resize:vertical}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 2px rgba(62,166,255,.18)}
-.custom-provider,.vertex-credential{display:none;margin-top:8px}
 .model-custom-input{display:none;margin-top:8px}
 .model-custom-active .model-custom-input{display:block}
-.credential-json{display:none}
-.provider-custom-active .custom-provider{display:block}
-.credential-vertex-active .api-key-credential{display:none}
-.credential-vertex-active .vertex-credential{display:block}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .example-url{font-size:.73rem;color:var(--muted);background:#121212;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:-3px 0 10px;overflow-wrap:anywhere}
 .msg{font-size:.82rem;padding:10px 12px;border-radius:8px;margin-bottom:12px;display:none}
@@ -5131,9 +5126,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       let pipelineState = normalizePipelineConfig(getActivePipelinePreset(pipelinePresetStoreState)?.pipeline || initialPipeline, modelPresetsState);
       let selectedAgentId = findFirstAgentId(pipelineState);
 
-      setupProviderControls();
-      setupCredentialFiles();
-      setupEndpointExamples();
       renderPipelinePresetControls();
       renderPipeline();
       renderAgentEditor();
@@ -6156,35 +6148,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await saveConfigVault(conf, conf.debugLog);
     }
 
-    async function testLiteLlm() {
-      const conf = {
-        provider: getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER),
-        baseUrl: normalizeUrl(getInputValue('agents_base_url') || DEFAULT_AGENT_BASE_URL),
-        apiKey: getCredentialValue('agents_api_key') || (await Risuai.getArgument('agents_api_key')) || '',
-        model: getInputValue('agents_model') || DEFAULT_AGENT_MODEL,
-        proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
-        proxyKey: getInputValue('agents_proxy_key') || (await Risuai.getArgument('agents_proxy_key')) || '',
-        proxyDirect: parseBool(getInputValue('agents_proxy_direct'), false),
-      };
-
-      if (!conf.apiKey) {
-        showMsg('Credential이 설정되지 않았습니다.', false);
-        setTestResults(testResultHtml(conf, false, null, null, 'Credential이 설정되지 않았습니다.'));
-        return;
-      }
-
-      const started = Date.now();
-      try {
-        const result = await testProviderEndpoint(conf);
-        const latency = Date.now() - started;
-        showMsg('Preset test 성공', true);
-        setTestResults(testResultHtml(conf, true, result.status, latency, '', result.url));
-      } catch (err) {
-        showMsg(`Preset test 실패: ${err.message}`, false);
-        setTestResults(testResultHtml(conf, false, null, Date.now() - started, err.message, testEndpointUrl(conf)));
-      }
-    }
-
     async function testProviderEndpoint(conf) {
       if (isAnthropicProvider(conf.provider)) {
         const url = `${conf.baseUrl}/models/${conf.model}`;
@@ -6316,50 +6279,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return document.getElementById(id)?.value?.trim() || '';
     }
 
-    function getProviderValue(id, fallback) {
-      const selected = document.getElementById(`${id}_select`)?.value || '';
-      if (selected === 'custom') return getInputValue(`${id}_custom`) || fallback || 'custom';
-      return selected || fallback;
-    }
-
-    function getCredentialValue(id) {
-      if (isVertexProvider(getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER))) {
-        return document.getElementById(`${id}_json`)?.value?.trim() || getInputValue(id);
-      }
-      return getInputValue(id);
-    }
-
-    function providerSelect(id, value) {
-      const options = providerOptions();
-      const normalized = normalizeProviderValue(value || '');
-      const known = options.some(option => option.value === normalized);
-      const selected = known ? normalized : 'custom';
-      const customValue = selected === 'custom' && value && !known ? value : '';
-      return `
-        <div class="provider-field" data-provider="${id}">
-          <select id="${id}_select" data-provider-select="${id}">
-            ${options.map(option => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
-          </select>
-          <input id="${id}_custom" class="custom-provider" type="text" value="${escHtml(customValue)}" placeholder="custom provider id">
-        </div>`;
-    }
-
-    function credentialField(id, value) {
-      return `
-        <div class="field credential-field" data-credential="${id}">
-          <div class="api-key-credential">
-            <label for="${id}">API Key</label>
-            <input id="${id}" type="password" value="" placeholder="${value ? '설정됨 - 비워두면 유지' : '입력 필요'}" autocomplete="off">
-          </div>
-          <div class="vertex-credential">
-            <label for="${id}_file">Vertex AI Service Account JSON</label>
-            <input id="${id}_file" type="file" accept="application/json,.json">
-            <textarea id="${id}_json" class="credential-json" aria-label="Vertex AI service account JSON"></textarea>
-            <div class="example-url">JSON 파일을 선택하면 credential로 저장됩니다. 원문은 화면에 표시하지 않습니다.</div>
-          </div>
-        </div>`;
-    }
-
     function providerOptions() {
       return [
         { value: 'openai', label: 'OpenAI' },
@@ -6403,55 +6322,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return defaults[normalized] || null;
     }
 
-    function knownProviderBaseUrls() {
-      return Object.values({
-        openai: providerDefaults('openai'),
-        ollama: providerDefaults('ollama'),
-        claude: providerDefaults('claude'),
-        vertex: providerDefaults('vertex-ai'),
-        deepseek: providerDefaults('deepseek'),
-        google: providerDefaults('google'),
-      }).map(item => item.baseUrl);
-    }
-
-    function setupProviderControls() {
-      document.querySelectorAll('[data-provider-select]').forEach(select => {
-        const update = () => {
-          const id = select.dataset.providerSelect;
-          const wrapper = document.querySelector(`[data-provider="${id}"]`);
-          wrapper?.classList.toggle('provider-custom-active', select.value === 'custom');
-          const credential = document.querySelector('[data-credential="agents_api_key"]');
-          credential?.classList.toggle('credential-vertex-active', select.value === 'vertex-ai');
-          applyProviderDefaults(select.value);
-          updateEndpointExample('agents_base_url');
-        };
-        select.addEventListener('change', update);
-        update();
-      });
-    }
-
-    function applyProviderDefaults(provider) {
-      if (!provider || provider === 'custom') return;
-      const defaults = providerDefaults(provider);
-      if (!defaults) return;
-
-      const baseInput = document.getElementById('agents_base_url');
-      const modelInput = document.getElementById('agents_model');
-      if (baseInput && shouldReplaceEndpoint(baseInput.value)) {
-        baseInput.value = defaults.baseUrl;
-        updateEndpointExample('agents_base_url');
-      }
-      if (modelInput && shouldReplaceModel(modelInput.value)) {
-        modelInput.value = defaults.model;
-      }
-    }
-
-    function shouldReplaceEndpoint(value) {
-      if (!String(value || '').trim()) return true;
-      const normalized = normalizeUrl(value || '');
-      return knownProviderBaseUrls().map(normalizeUrl).includes(normalized);
-    }
-
     function shouldReplaceModel(value) {
       const normalized = String(value || '').trim();
       if (!normalized) return true;
@@ -6466,39 +6336,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       ].includes(normalized);
     }
 
-    function setupEndpointExamples() {
-      document.querySelectorAll('[data-example-for]').forEach(example => {
-        const baseId = example.dataset.exampleFor;
-        const input = document.getElementById(baseId);
-        input?.addEventListener('input', () => updateEndpointExample(baseId));
-        updateEndpointExample(baseId);
-      });
-    }
-
-    function updateEndpointExample(baseId) {
-      const example = document.querySelector(`[data-example-for="${baseId}"]`);
-      const input = document.getElementById(baseId);
-      if (!example || !input) return;
-      example.textContent = `예시 URL: ${exampleApiUrl({
-        provider: getProviderValue('agents_provider', DEFAULT_AGENT_PROVIDER),
-        baseUrl: input.value || DEFAULT_AGENT_BASE_URL,
-      })}`;
-    }
-
-    function setupCredentialFiles() {
-      document.querySelectorAll('input[type="file"][id$="_file"]').forEach(input => {
-        input.addEventListener('change', async () => {
-          const file = input.files?.[0];
-          if (!file) return;
-          const text = await file.text();
-          const targetId = input.id.replace(/_file$/, '_json');
-          const target = document.getElementById(targetId);
-          if (target) target.value = text;
-          showMsg('Vertex AI JSON credential을 불러왔습니다.', true);
-        });
-      });
-    }
-
     function parseVertexCredential(text) {
       try {
         const parsed = JSON.parse(text);
@@ -6508,15 +6345,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       } catch (err) {
         if (err instanceof SyntaxError) throw new Error(`JSON 파싱 실패: ${err.message}`);
         throw err;
-      }
-    }
-
-    function validateVertexCredential(text) {
-      try {
-        parseVertexCredential(text);
-        return { ok: true, error: '' };
-      } catch (err) {
-        return { ok: false, error: err.message };
       }
     }
 
@@ -6724,20 +6552,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
     }
 
-    function exampleApiUrl(conf) {
-      if (isAnthropicProvider(conf.provider)) return `${normalizeUrl(conf.baseUrl)}/messages`;
-      return `${normalizeUrl(conf.baseUrl)}/chat/completions`;
-    }
-
-    function formatEndpoint(baseUrl) {
-      try {
-        const url = new URL(baseUrl);
-        return url.host || baseUrl;
-      } catch (_) {
-        return baseUrl || '-';
-      }
-    }
-
     function parseOptionalInt(value) {
       const raw = String(value || '').trim();
       if (!raw) return null;
@@ -6751,11 +6565,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       if (['1', 'true', 'yes', 'y', 'on'].includes(raw)) return true;
       if (['0', 'false', 'no', 'n', 'off'].includes(raw)) return false;
       return fallback;
-    }
-
-    function requiredFloat(id, fallback) {
-      const parsed = parseFloat(getInputValue(id));
-      return Number.isFinite(parsed) ? parsed : fallback;
     }
 
     function escHtml(str) {
@@ -6993,7 +6802,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
     });
 
-    console.log('Agents! v1.1.2 loaded');
+    console.log('Agents! v1.1.10 loaded');
 
   } catch (err) {
     console.log(`Agents! init error: ${err.message}`);
