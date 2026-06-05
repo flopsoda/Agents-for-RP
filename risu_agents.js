@@ -6591,7 +6591,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           preset.baseUrl = providerDefaults(preset.provider).baseUrl;
         }
         const endpointField = isCustomProvider
-          ? `<div class="field"><label for="preset_baseUrl">Endpoint Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}"></div>`
+          ? `<div class="field"><label for="preset_baseUrl">API Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}" placeholder="https://api.example.com/v1"></div>
+             <div class="example-url">/chat/completions, /models, /messages는 입력하지 마세요. Agents!가 요청할 때 자동으로 붙입니다.</div>`
           : '';
         const providerWarning = isOllamaProvider(preset.provider)
           ? '<div class="example-url">RisuAI 웹판에서 Ollama Cloud 직접 호출은 CORS로 막힐 수 있습니다. 공통 설정의 CORS Proxy URL을 사용하세요.</div>'
