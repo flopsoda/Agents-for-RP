@@ -67,6 +67,19 @@ This project targets RisuAI plugin development. Use the local reference files in
   - If `gh` is unavailable or not authenticated, still push the commit and tag, then report the blocker and provide the exact release notes text for manual publishing.
 - If the user says no, do not change `//@version` and do not push unless the user explicitly asks.
 
+## Handoff Summary Workflow
+
+- If the user provides a previous handoff summary, preserve it as working context.
+- After completing a feature, bug fix, refactor, documentation update, or other concrete project change, update that handoff summary before finishing.
+- If no previous handoff summary was provided, create a fresh handoff summary for the completed work.
+- Write the handoff summary inside a Markdown code block so the user can pass it to another chat easily.
+- Keep the summary concise, but include:
+  - What changed
+  - Files touched
+  - Tests/checks run and any checks that could not be run
+  - Commit hash/message if a commit was created
+  - Release status, including whether version bump, tag, push, or GitHub Release was intentionally skipped
+
 ## Documentation Policy
 
 - Prefer current files copied from the RisuAI GitHub repository over old Wiki pages.
