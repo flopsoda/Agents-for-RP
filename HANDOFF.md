@@ -36,6 +36,10 @@ Recent completed changes:
   - Added a `Main Model Editor` with a `검수 지침` textarea that saves with the active pipeline preset.
   - Changed note injection so custom check instructions are used, and blank instructions omit the `[검수 지침]` section.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Simplified the default Main Model check instruction in `risu_agents.js`.
+  - Changed the default from explicit world/plot/OOC correction language to `위 분석을 참고하여 최종 RP 응답을 작성하세요.`
+  - Existing saved pipeline-specific custom instructions remain unchanged.
+  - No new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -69,6 +73,11 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+- For default Main Model check instruction simplification:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -77,6 +86,7 @@ Commits:
 - `2b80a80 Use persistent handoff summary file`
 - `4254b29 Update Agent Platform labels`
 - `c25b221 Customize main model check instruction`
+- `25362c3 Simplify main model default instruction`
 
 Release status:
 - User previously said not to release yet.
