@@ -29,6 +29,13 @@ Recent completed changes:
   - Updated the `agents_base_url` argument help text, credential toast, API/Base URL/access-token/WebCrypto error text, and debug log labels.
   - Kept provider IDs, aliases, function/variable names, endpoint URLs, authentication flow, model defaults, and `//@version 1.1.11` unchanged.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Added per-pipeline Main Model check instruction customization in `risu_agents.js`.
+  - Added `mainModel.checkInstruction` to the normalized pipeline schema and bumped the pipeline config version.
+  - Kept the previous hardcoded `[검수 지침]` text as the default for existing pipelines.
+  - Made Row 5 `Main Model` selectable in the settings pipeline builder.
+  - Added a `Main Model Editor` with a `검수 지침` textarea that saves with the active pipeline preset.
+  - Changed note injection so custom check instructions are used, and blank instructions omit the `[검수 지침]` section.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -57,6 +64,11 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+- For Main Model check instruction customization:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -64,6 +76,7 @@ Commits:
 - `7abd1fd Fix post-agent prompt context assembly`
 - `2b80a80 Use persistent handoff summary file`
 - `4254b29 Update Agent Platform labels`
+- `c25b221 Customize main model check instruction`
 
 Release status:
 - User previously said not to release yet.
