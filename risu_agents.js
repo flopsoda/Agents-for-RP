@@ -53,6 +53,7 @@
     const AGENT_EXPORT_KIND = 'risu-agents.agent-preset';
     const PIPELINE_EXPORT_KIND = 'risu-agents.pipeline-preset';
     const DEFAULT_PROVIDER_ORDER = ['openai', 'google', 'claude', 'vertex-ai', 'deepseek', 'ollama'];
+    const CUSTOM_PROVIDER_SLOTS = ['custom', 'custom-2', 'custom-3', 'custom-4', 'custom-5', 'custom-6'];
     const EMPTY_AGENT_MEMORY = '(저장된 기억 없음)';
     const MEMORY_NOTE_TAG = 'AGENT_NOTE';
     const MEMORY_UPDATE_TAG = 'MEMORY_UPDATE';
@@ -221,7 +222,10 @@
         Risuai.getArgument('agents_model_presets_json'),
         Risuai.getArgument('agents_pipeline_json'),
       ]);
-      const provider = String(preferArgumentValue(providerArg, vault.provider || DEFAULT_AGENT_PROVIDER));
+      const provider = normalizeSupportedProviderValue(
+        preferArgumentValue(providerArg, vault.provider || DEFAULT_AGENT_PROVIDER),
+        'custom',
+      );
       const baseUrl = normalizeUrl(preferArgumentValue(baseUrlArg, vault.baseUrl || DEFAULT_AGENT_BASE_URL));
       const configuredApiKey  = String(preferArgumentValue(configuredApiKeyArg, vault.configuredApiKey || vault.apiKey || ''));
       const model   = String(preferArgumentValue(modelArg, vault.model || DEFAULT_AGENT_MODEL));
@@ -374,7 +378,7 @@
     }
 
     function normalizeConfigVault(conf) {
-      const provider = String(conf?.provider || DEFAULT_AGENT_PROVIDER);
+      const provider = normalizeSupportedProviderValue(conf?.provider || DEFAULT_AGENT_PROVIDER, 'custom');
       const baseUrl = normalizeUrl(conf?.baseUrl || DEFAULT_AGENT_BASE_URL);
       const temperature = Number.isFinite(Number(conf?.temperature)) ? Number(conf.temperature) : 0.7;
       const maxTokens = conf?.maxTokens === null || conf?.maxTokens === undefined || conf?.maxTokens === ''
@@ -636,7 +640,8 @@
           const parsed = JSON.parse(String(raw));
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             Object.keys(parsed).forEach((key) => {
-              const provider = normalizeProviderValue(key);
+              const rawProvider = normalizeProviderValue(key);
+              const provider = isSupportedProviderValue(rawProvider) ? rawProvider : '';
               const value = String(parsed[key] || '');
               if (provider && value && value !== MASKED_SECRET) keys[provider] = value;
             });
@@ -647,7 +652,10 @@
       }
 
       const configuredKey = String(configuredApiKey || '');
-      const normalizedConfiguredProvider = normalizeProviderValue(configuredProvider || DEFAULT_AGENT_PROVIDER);
+      const normalizedConfiguredProvider = normalizeSupportedProviderValue(
+        configuredProvider || DEFAULT_AGENT_PROVIDER,
+        'custom',
+      );
       if (configuredKey && configuredKey !== MASKED_SECRET && normalizedConfiguredProvider && !keys[normalizedConfiguredProvider]) {
         keys[normalizedConfiguredProvider] = configuredKey;
       }
@@ -683,7 +691,7 @@
       while (used.has(id)) id = `${baseId}-${used.size + 1}`;
       used.add(id);
 
-      const provider = normalizeProviderValue(preset?.provider || fallback.provider || DEFAULT_AGENT_PROVIDER);
+      const provider = normalizeSupportedProviderValue(preset?.provider || fallback.provider || DEFAULT_AGENT_PROVIDER, 'custom');
       const defaults = providerDefaults(provider);
       return {
         id,
@@ -745,7 +753,7 @@
     }
 
     function defaultModelPresetForProvider(provider, fallbackConfig, idx = 0) {
-      const normalized = normalizeProviderValue(provider || DEFAULT_AGENT_PROVIDER);
+      const normalized = normalizeSupportedProviderValue(provider || DEFAULT_AGENT_PROVIDER, DEFAULT_AGENT_PROVIDER);
       const defaults = providerDefaults(normalized) || providerDefaults(DEFAULT_AGENT_PROVIDER);
       return {
         id: normalized === DEFAULT_AGENT_PROVIDER ? DEFAULT_MODEL_PRESET_ID : `preset-default-${normalized}`,
@@ -810,12 +818,43 @@
         'vertex-ai': 'Agent Platform Gemini',
         deepseek: 'DeepSeek',
       };
+      if (isCustomProviderSlot(provider)) return customProviderLabel(provider);
       return names[normalizeProviderValue(provider)] || 'Model Preset';
     }
 
     function getProviderApiKey(providerKeys, provider) {
       const normalized = normalizeProviderValue(provider || DEFAULT_AGENT_PROVIDER);
       return String(providerKeys?.[normalized] || '');
+    }
+
+    function isCustomProviderSlot(provider) {
+      return CUSTOM_PROVIDER_SLOTS.includes(normalizeProviderValue(provider));
+    }
+
+    function isSupportedProviderValue(provider) {
+      const normalized = normalizeProviderValue(provider);
+      return Boolean(providerDefaults(normalized)) || isCustomProviderSlot(normalized);
+    }
+
+    function normalizeSupportedProviderValue(provider, fallback = DEFAULT_AGENT_PROVIDER) {
+      const normalized = normalizeProviderValue(provider);
+      if (isSupportedProviderValue(normalized)) return normalized;
+      const normalizedFallback = normalizeProviderValue(fallback || DEFAULT_AGENT_PROVIDER);
+      if (isSupportedProviderValue(normalizedFallback)) return normalizedFallback;
+      return DEFAULT_AGENT_PROVIDER;
+    }
+
+    function customProviderLabel(provider) {
+      const index = CUSTOM_PROVIDER_SLOTS.indexOf(normalizeProviderValue(provider));
+      return index >= 0 ? `Custom ${index + 1}` : '';
+    }
+
+    function providerDisplayLabel(provider) {
+      const normalized = normalizeProviderValue(provider);
+      const customLabel = customProviderLabel(normalized);
+      if (customLabel) return customLabel;
+      const option = providerOptions().find(item => item.value === normalized);
+      return option?.label || normalized || 'Provider';
     }
 
     function findModelPreset(presets, id) {
@@ -4419,8 +4458,9 @@
             };
           }
           if (!agentConf.apiKey) {
-            const content = `(실패: ${agentConf.provider} provider API key 없음)`;
-            console.log(`Agents! pre-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
+            const providerLabel = providerDisplayLabel(agentConf.provider);
+            const content = `(실패: ${providerLabel} provider API key 없음)`;
+            console.log(`Agents! pre-agent skipped (${agent.name}): ${providerLabel} provider API key not set`);
             return {
               ...runAgentMeta(agent, conf),
               ...finishAgentTiming(timing),
@@ -4642,7 +4682,8 @@
           continue;
         }
         if (!agentConf.apiKey) {
-          console.log(`Agents! post-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
+          const providerLabel = providerDisplayLabel(agentConf.provider);
+          console.log(`Agents! post-agent skipped (${agent.name}): ${providerLabel} provider API key not set`);
           if (keepRunDetails) {
             postResults.push({
               ...runAgentMeta(agent, conf),
@@ -4651,7 +4692,7 @@
               failed: true,
               inputResponse: currentResponse,
               outputResponse: currentResponse,
-              error: `${agentConf.provider} provider API key 없음`,
+              error: `${providerLabel} provider API key 없음`,
             });
           }
           continue;
@@ -6884,7 +6925,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const selected = preset.id === selectedPresetId ? ' selected' : '';
           return `<div class="preset-item${selected}" data-preset-id="${escHtml(preset.id)}">
             <div class="preset-title">${escHtml(preset.name)}</div>
-            <div class="preset-meta">${escHtml(preset.provider)} · ${escHtml(preset.model)}${escHtml(reasoningQuickSettingMeta(preset))}</div>
+            <div class="preset-meta">${escHtml(providerDisplayLabel(preset.provider))} · ${escHtml(preset.model)}${escHtml(reasoningQuickSettingMeta(preset))}</div>
           </div>`;
         }).join('');
         root.querySelectorAll('[data-preset-id]').forEach((item) => {
@@ -6904,12 +6945,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           root.innerHTML = '<div class="editor-empty">모델 프리셋을 추가하세요.</div>';
           return;
         }
-        if (!providerDefaults(preset.provider) && preset.provider !== 'custom') {
+        let defaults = providerDefaults(preset.provider);
+        if (!defaults && !isCustomProviderSlot(preset.provider)) {
           preset.provider = 'custom';
+          defaults = providerDefaults(preset.provider);
         }
-        const isCustomProvider = !providerDefaults(preset.provider);
-        if (!isCustomProvider) {
-          preset.baseUrl = providerDefaults(preset.provider).baseUrl;
+        const isCustomProvider = isCustomProviderSlot(preset.provider);
+        if (!isCustomProvider && defaults) {
+          preset.baseUrl = defaults.baseUrl;
         }
         const endpointField = isCustomProvider
           ? `<div class="field"><label for="preset_baseUrl">API Base URL</label><input id="preset_baseUrl" type="text" value="${escHtml(preset.baseUrl)}" placeholder="https://api.example.com/v1"></div>
@@ -7000,6 +7043,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         if (!root) return;
 
         const provider = normalizeProviderValue(selectedProviderKeyProvider || DEFAULT_AGENT_PROVIDER);
+        const providerLabel = providerDisplayLabel(provider);
         const hasKey = Boolean(providerKeysState[provider]);
         const status = hasKey
           ? '<span class="badge ok">저장됨</span>'
@@ -7015,7 +7059,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             <div class="field"><label>저장 상태</label><div class="provider-key-status">${status}</div></div>
           </div>
           <div class="provider-key-row">
-            <div class="field"><label for="provider_key_secret">${escHtml(provider)} API Key</label>${secretField}</div>
+            <div class="field"><label for="provider_key_secret">${escHtml(providerLabel)} API Key</label>${secretField}</div>
             <button id="provider-key-delete-btn" class="danger">키 삭제</button>
           </div>`;
 
@@ -7100,10 +7144,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           showMsg('테스트할 모델 프리셋을 선택하세요.', false);
           return;
         }
+        const provider = normalizeProviderValue(preset.provider || DEFAULT_AGENT_PROVIDER);
         const conf = {
-          provider: preset.provider,
+          provider,
           baseUrl: normalizeUrl(preset.baseUrl || DEFAULT_AGENT_BASE_URL),
-          apiKey: providerKeysState[preset.provider] || '',
+          apiKey: getProviderApiKey(providerKeysState, provider),
           model: preset.model || DEFAULT_AGENT_MODEL,
           proxyUrl: normalizeProxyUrl(getInputValue('agents_proxy_url')),
           proxyKey: getInputValue('agents_proxy_key') || initialConf.proxyKey || '',
@@ -7111,7 +7156,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         };
 
         if (!conf.apiKey) {
-          showMsg(`${preset.provider} credential이 설정되지 않았습니다.`, false);
+          showMsg(`${providerDisplayLabel(provider)} credential이 설정되지 않았습니다.`, false);
           setTestResults(testResultHtml(conf, false, null, null, 'Credential이 설정되지 않았습니다.'));
           return;
         }
@@ -7246,7 +7291,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
       const normalizedKeys = {};
       Object.keys(providerKeys || {}).forEach((key) => {
-        const provider = normalizeProviderValue(key);
+        const rawProvider = normalizeProviderValue(key);
+        const provider = isSupportedProviderValue(rawProvider) ? rawProvider : '';
         const value = String(providerKeys[key] || '');
         if (provider && value && value !== MASKED_SECRET) normalizedKeys[provider] = value;
       });
@@ -7360,7 +7406,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           <h3>Preset test</h3>
           <div class="kv">
             <div class="k">결과</div><div class="v"><span class="badge ${success ? 'ok' : 'err'}">${success ? '성공' : '실패'}</span></div>
-            <div class="k">Provider</div><div class="v">${escHtml(conf.provider)}</div>
+            <div class="k">Provider</div><div class="v">${escHtml(providerDisplayLabel(conf.provider))}</div>
             <div class="k">Model</div><div class="v">${escHtml(conf.model)}</div>
             <div class="k">URL</div><div class="v">${escHtml(urlOverride || testEndpointUrl(conf))}</div>
             <div class="k">HTTP</div><div class="v">${escHtml(status ?? '-')}</div>
@@ -7442,7 +7488,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         { value: 'vertex-ai', label: 'Agent Platform (구 Vertex AI)' },
         { value: 'deepseek', label: 'DeepSeek' },
         { value: 'ollama', label: 'Ollama (웹판은 Proxy 권장)' },
-        { value: 'custom', label: 'Custom' },
+        ...CUSTOM_PROVIDER_SLOTS.map(value => ({ value, label: customProviderLabel(value) })),
       ];
     }
 
