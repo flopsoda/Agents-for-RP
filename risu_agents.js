@@ -2670,7 +2670,7 @@
     const POST_MODE_SUFFIX = 'suffix';
     const POST_MODES = [POST_MODE_POLISH, POST_MODE_PREFIX, POST_MODE_SUFFIX];
     const DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION =
-      '위 분석을 참고하여 최종 RP 응답을 작성하세요.';
+      '위 분석을 반영하여 최종 RP 응답을 작성하세요.';
     const DEFAULT_OUTPUT_PRE =
       '간결한 불릿 포인트로 관찰과 제안만 정리하세요. 실제 RP 본문이나 최종 응답 문장은 작성하지 마세요.';
     const DEFAULT_OUTPUT_POST_POLISH =
