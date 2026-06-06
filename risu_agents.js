@@ -912,9 +912,9 @@
 
     async function buildSettingBlocks(messages, options = {}) {
       const parts = {
-        characterDescription: '(캐릭터 설명 없음)',
-        userDescription: '(유저 설명 접근 불가: DB 권한 없음)',
-        authorNote: '(작가의 노트 없음)',
+        characterDescription: '(No character description)',
+        userDescription: '(User description unavailable: database permission not granted)',
+        authorNote: '(No author note)',
         activeLorebooks: [],
       };
       const stats = {
@@ -969,11 +969,11 @@
             parts.userDescription = personaPrompt;
             stats.persona = 'found';
           } else {
-            parts.userDescription = '(유저 설명 없음)';
+            parts.userDescription = '(No user description)';
             stats.persona = 'missing';
           }
         } else {
-          parts.userDescription = '(유저 설명 없음)';
+          parts.userDescription = '(No user description)';
           stats.persona = 'missing';
         }
       }
@@ -1023,8 +1023,8 @@
       // 마지막 유저 메시지를 제외한 최근 N개
       const chatMsgs = messages.filter(m => m.role === 'user' || m.role === 'assistant');
       const recent = chatMsgs.slice(-(windowSize + 1), -1);
-      if (!recent.length) return '(대화 히스토리 없음)';
-      return recent.map(m => `[${m.role === 'user' ? '유저' : 'AI'}]: ${m.content}`).join('\n');
+      if (!recent.length) return '(No conversation history)';
+      return recent.map(m => `[${m.role === 'user' ? 'User' : 'Assistant'}]: ${m.content}`).join('\n');
     }
 
     function firstNonEmpty(...values) {
@@ -2164,7 +2164,7 @@
         if (!lore) return;
         const content = firstNonEmpty(lore.content, lore.prompt, lore.text, lore.entry);
         if (!content) return;
-        const label = firstNonEmpty(lore.comment, lore.name, lore.displayName, sourcePrefix, '로어북');
+        const label = firstNonEmpty(lore.comment, lore.name, lore.displayName, sourcePrefix, 'Lorebook');
         const dedupeKey = normalizeForMatch(`${sourceType}\n${label}\n${content}\n${firstNonEmpty(lore.key, lore.keys, lore.keywords)}`);
         if (seen.has(dedupeKey)) return;
         seen.add(dedupeKey);
@@ -2173,12 +2173,12 @@
 
       if (character) {
         if (Array.isArray(character.globalLore)) {
-          character.globalLore.forEach((lore, idx) => addLore(lore, '캐릭터 로어북', 'character', idx));
+          character.globalLore.forEach((lore, idx) => addLore(lore, 'Character Lorebook', 'character', idx));
         }
 
         const chat = currentChatContext?.chat || getCurrentCharacterChat(character);
         if (Array.isArray(chat?.localLore)) {
-          chat.localLore.forEach((lore, idx) => addLore(lore, '채팅 로어북', 'chat', idx));
+          chat.localLore.forEach((lore, idx) => addLore(lore, 'Chat Lorebook', 'chat', idx));
         }
       }
 
@@ -2190,7 +2190,7 @@
           enabled.has(String(module?.name)) ||
           enabled.has(String(module?.namespace));
         if (!moduleEnabled || !Array.isArray(module?.lorebook)) continue;
-        module.lorebook.forEach((lore, idx) => addLore(lore, `모듈 로어북: ${module.name || module.id || 'unknown'}`, 'module', idx));
+        module.lorebook.forEach((lore, idx) => addLore(lore, `Module Lorebook: ${module.name || module.id || 'unknown'}`, 'module', idx));
       }
 
       return candidates;
@@ -2493,21 +2493,21 @@
     function formatSettingBlocks(parts) {
       const loreText = parts.activeLorebooks.length
         ? parts.activeLorebooks
-            .map((lore, idx) => `[로어북 ${idx + 1}: ${lore.label}]\n${lore.content}`)
+            .map((lore, idx) => `[Lorebook ${idx + 1}: ${lore.label}]\n${lore.content}`)
             .join('\n\n')
-        : '(활성 로어북 매칭 없음)';
+        : '(No active lorebook matches)';
 
       return [
-        '[캐릭터 설명]',
+        '[Character Description]',
         parts.characterDescription,
         '',
-        '[유저 설명]',
+        '[User Description]',
         parts.userDescription,
         '',
-        '[작가의 노트]',
+        '[Author\'s Note]',
         parts.authorNote,
         '',
-        '[현재 활성화된 로어북]',
+        '[Active Lorebooks]',
         loreText,
       ].join('\n');
     }
@@ -3033,45 +3033,45 @@
 
       if (agent.includeSettingBlocks) {
         sections.push(context.settingBlocks || formatSettingBlocks({
-          characterDescription: '(캐릭터 설명 없음)',
-          userDescription: '(유저 설명 없음)',
-          authorNote: '(작가의 노트 없음)',
+          characterDescription: '(No character description)',
+          userDescription: '(No user description)',
+          authorNote: '(No author note)',
           activeLorebooks: [],
         }));
       }
       if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
-        sections.push(`[글로벌 노트 덮어쓰기]\n${context.globalNoteReplacement}`);
+        sections.push(`[Global Note Replacement]\n${context.globalNoteReplacement}`);
       }
       if (agent.includeHistory) {
-        sections.push(`[최근 대화]\n${context.history || '(최근 대화 없음)'}`);
+        sections.push(`[Recent Conversation]\n${context.history || '(No recent conversation)'}`);
       }
       if (agent.includeUserInput) {
-        sections.push(`[현재 유저 입력]\n${context.userInput || '(현재 유저 입력 없음)'}`);
+        sections.push(`[Current User Input]\n${context.userInput || '(No current user input)'}`);
       }
       if (agent.includePreviousNotes) {
-        const label = agent.mode === 'post' ? 'Pre-Agent 노트' : '이전 에이전트 노트';
-        sections.push(`[${label}]\n${formatAgentNotes(context.notes, '(이전 에이전트 노트 없음)')}`);
+        const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
+        sections.push(`[${label}]\n${formatAgentNotes(context.notes, '(No previous agent notes)')}`);
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
-        sections.push(`[이전 기억]\n${context.agentMemory || EMPTY_AGENT_MEMORY}`);
-        sections.push(`[기억 지시]\n${agent.memoryInstruction || '(기억 지시 없음)'}`);
-        sections.push(`[기억 포맷]\n${agent.memoryFormat || '(지정된 기억 포맷 없음)'}`);
+        sections.push(`[Previous Memory]\n${context.agentMemory || '(No saved memory)'}`);
+        sections.push(`[Memory Instruction]\n${agent.memoryInstruction || '(No memory instruction)'}`);
+        sections.push(`[Memory Format]\n${agent.memoryFormat || '(No memory format specified)'}`);
       }
       if (agent.mode === 'post') {
-        sections.push(`[현재 응답]\n${context.currentResponse || ''}`);
+        sections.push(`[Current Response]\n${context.currentResponse || ''}`);
       }
 
       const outputInstruction = agent.mode === 'pre' && agent.memoryEnabled
         ? `${agent.outputInstruction}\n\n${memoryFinalOutputReminder()}`
         : agent.outputInstruction;
-      sections.push(`[${agent.mode === 'post' ? '후처리 지시' : '현재 에이전트 지시'}]\n${outputInstruction}`);
+      sections.push(`[${agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction'}]\n${outputInstruction}`);
 
       const systemContent = [
         agent.systemPrompt,
         '',
         agent.mode === 'post'
           ? postModeOutputContract(agent.postMode)
-          : '최종 RP 응답은 작성하지 말고 보조 메모만 작성하세요.',
+          : 'Do not write the final RP response. Write auxiliary notes only.',
         agent.mode === 'pre' && agent.memoryEnabled ? `\n${memoryOutputContract(agent)}` : '',
       ].join('\n');
 
@@ -3085,19 +3085,19 @@
       switch (normalizePostMode(postMode)) {
         case POST_MODE_PREFIX:
           return [
-            '반드시 현재 응답 앞에 붙일 추가 텍스트 조각만 출력하세요.',
-            '현재 응답 본문을 반복하거나 다시 쓰지 마세요.',
-            '분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.',
+            'Output only the additional text fragment to prepend before the current response.',
+            'Do not repeat or rewrite the current response body.',
+            'Do not output analysis notes, explanations, change lists, or labels.',
           ].join('\n');
         case POST_MODE_SUFFIX:
           return [
-            '반드시 현재 응답 뒤에 붙일 추가 텍스트 조각만 출력하세요.',
-            '현재 응답 본문을 반복하거나 다시 쓰지 마세요.',
-            '분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.',
+            'Output only the additional text fragment to append after the current response.',
+            'Do not repeat or rewrite the current response body.',
+            'Do not output analysis notes, explanations, change lists, or labels.',
           ].join('\n');
         case POST_MODE_POLISH:
         default:
-          return '반드시 최종 사용자에게 보여줄 수정 응답 전체만 출력하세요. 분석 메모, 설명, 변경 목록을 출력하지 마세요.';
+          return 'Output only the full revised response that should be shown to the user. Do not output analysis notes, explanations, or change lists.';
       }
     }
 
@@ -3113,25 +3113,25 @@
 
     function memoryOutputContract(agent = null) {
       const lines = [
-        '이 에이전트는 기억 갱신이 활성화되어 있습니다.',
-        '반드시 아래 형식을 정확히 지켜 출력하세요. 태그 밖에는 아무 텍스트도 쓰지 마세요.',
-        'MEMORY_UPDATE는 저장 전용이며, 다음 턴에 유지할 최신 기억 전체 상태여야 합니다.',
-        'MEMORY_UPDATE에는 AGENT_NOTE의 보조 분석이나 최종 RP 응답을 섞지 마세요.',
+        'Memory updates are enabled for this agent.',
+        'You must output exactly in the format below. Do not write any text outside the tags.',
+        'MEMORY_UPDATE is for storage only and must contain the full latest memory state to keep for the next turn.',
+        'Do not mix AGENT_NOTE auxiliary analysis or the final RP response into MEMORY_UPDATE.',
         '',
         `[${MEMORY_NOTE_TAG}]`,
-        '다음 에이전트나 메인 모델에게 전달할 보조 노트',
+        'Auxiliary note to pass to the next agent or the main model',
         `[/${MEMORY_NOTE_TAG}]`,
         '',
         `[${MEMORY_UPDATE_TAG}]`,
-        '다음 턴에 유지할 최신 기억 전체. 변경분만 쓰지 말고 전체 상태를 작성하세요.',
+        'Full latest memory state to keep for the next turn. Do not write only the delta.',
         `[/${MEMORY_UPDATE_TAG}]`,
       ];
 
       if (agent?.memoryFormat) {
         lines.push(
           '',
-          '중요: MEMORY_UPDATE는 반드시 [기억 포맷]에 적힌 형태만 따르세요.',
-          '설명, 요약, 배경 정보, 마크다운, 불릿 포인트, 제목을 추가하지 마세요.',
+          'Important: MEMORY_UPDATE must follow only the format specified in [Memory Format].',
+          'Do not add explanations, summaries, background information, Markdown, bullet points, or headings.',
         );
       }
 
@@ -3140,17 +3140,17 @@
 
     function memoryFinalOutputReminder() {
       return [
-        '마지막 출력 형식 검수:',
-        `반드시 [${MEMORY_NOTE_TAG}], [/${MEMORY_NOTE_TAG}], [${MEMORY_UPDATE_TAG}], [/${MEMORY_UPDATE_TAG}] 네 태그를 모두 포함하세요.`,
-        '태그 밖에는 아무 텍스트도 쓰지 마세요.',
-        `[${MEMORY_NOTE_TAG}]를 열었으면 반드시 [/${MEMORY_NOTE_TAG}]로 닫은 뒤 [${MEMORY_UPDATE_TAG}]를 시작하세요.`,
+        'Final output format check:',
+        `You must include all four tags: [${MEMORY_NOTE_TAG}], [/${MEMORY_NOTE_TAG}], [${MEMORY_UPDATE_TAG}], and [/${MEMORY_UPDATE_TAG}].`,
+        'Do not write any text outside the tags.',
+        `After opening [${MEMORY_NOTE_TAG}], you must close it with [/${MEMORY_NOTE_TAG}] before starting [${MEMORY_UPDATE_TAG}].`,
         '',
         `[${MEMORY_NOTE_TAG}]`,
-        '다음 에이전트나 메인 모델에게 전달할 보조 노트',
+        'Auxiliary note to pass to the next agent or the main model',
         `[/${MEMORY_NOTE_TAG}]`,
         '',
         `[${MEMORY_UPDATE_TAG}]`,
-        '다음 턴에 유지할 최신 기억 전체',
+        'Full latest memory state to keep for the next turn',
         `[/${MEMORY_UPDATE_TAG}]`,
       ].join('\n');
     }
@@ -4265,7 +4265,7 @@
             history,
             userInput,
             notes,
-            agentMemory: agentMemory.value || EMPTY_AGENT_MEMORY,
+            agentMemory: agentMemory.value || '',
           });
           const cbsRender = renderAgentCbsMessages(rawPrompt, cbsContext, {
             debugLog: conf.debugLog,
@@ -4418,9 +4418,9 @@
         type,
         postResults: [],
         settingBlocks: formatSettingBlocks({
-          characterDescription: '(캐릭터 설명 없음)',
-          userDescription: '(유저 설명 없음)',
-          authorNote: '(작가의 노트 없음)',
+          characterDescription: '(No character description)',
+          userDescription: '(No user description)',
+          authorNote: '(No author note)',
           activeLorebooks: [],
         }),
         globalNoteReplacement: '',
@@ -4580,13 +4580,13 @@
       const injectionParts = [
         '',
         '---',
-        '[Agents! 분석 컨텍스트]',
+        '[Agents! Analysis Context]',
         '',
-        formatAgentNotes(orderedNotes, '(에이전트 노트 없음)'),
+        formatAgentNotes(orderedNotes, '(No agent notes)'),
         '',
       ];
       if (checkInstruction) {
-        injectionParts.push('[검수 지침]', checkInstruction, '');
+        injectionParts.push('[Check Instruction]', checkInstruction, '');
       }
       injectionParts.push('---');
       const injection = injectionParts.join('\n');
