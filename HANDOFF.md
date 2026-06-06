@@ -65,6 +65,13 @@ Recent completed changes:
   - Hid duration for reused pre-agent results and old logs without timing fields.
   - Kept `RUN_LOG_VERSION` and `//@version 1.1.11` unchanged.
   - Checked `docs/risuai/types/risuai.d.ts`; no new RisuAI API was needed.
+- Fixed numeric plugin arg fallback handling in `risu_agents.js`.
+  - Added a numeric argument resolver for Risu `int` args that may return `0` when unset after reinstall/hot reload.
+  - Applied it to `agents_context_window`, `agents_api_timeout_seconds`, and `agents_api_retry_attempts`.
+  - Preserved stored vault values when unset arg `0` is seen, including an intentional stored retry attempts value of `0`.
+  - Did not auto-migrate existing legal timeout values such as `30`.
+  - Kept `//@version 1.1.11` unchanged.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -124,6 +131,11 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - Static review confirmed `RUN_LOG_VERSION` stayed unchanged, reused results hide duration, and old logs without `durationMs` render without a duration badge.
+- For numeric plugin arg fallback handling:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - JavaScriptCore resolver scenario checks passed for timeout, retry attempts, and context window arg `0` fallback behavior.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -137,6 +149,7 @@ Commits:
 - `c91209e Add agent API retry settings`
 - `91ac884 Update main model default check instruction`
 - `aca07b4 Show agent durations in run inspector`
+- `33f7163 Fix numeric arg fallback handling`
 
 Release status:
 - User previously said not to release yet.
