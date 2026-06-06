@@ -14,6 +14,8 @@
 //@arg agents_run_log_enabled string Store Agents! run logs for Run Inspector. true/false (default: false)
 //@arg agents_bypass_aux_requests string Skip Agents! for auxiliary RisuAI requests. true/false (default: true)
 //@arg agents_api_timeout_seconds int Agent API timeout seconds (default: 120)
+//@arg agents_api_retry_enabled string Retry failed agent API requests. true/false (default: false)
+//@arg agents_api_retry_attempts int Additional agent API retry attempts (default: 2)
 //@arg agents_extra_body_json string Extra JSON body merged into agent API requests
 //@arg agents_proxy_url string Optional CORS proxy URL for agent requests
 //@arg agents_proxy_key string Optional CORS proxy access token
@@ -78,6 +80,12 @@
     const DEFAULT_AGENT_API_TIMEOUT_SECONDS = Math.round(AGENT_LLM_TIMEOUT_MS / 1000);
     const MIN_AGENT_API_TIMEOUT_SECONDS = 30;
     const MAX_AGENT_API_TIMEOUT_SECONDS = 600;
+    const DEFAULT_AGENT_API_RETRY_ATTEMPTS = 2;
+    const MIN_AGENT_API_RETRY_ATTEMPTS = 0;
+    const MAX_AGENT_API_RETRY_ATTEMPTS = 5;
+    const AGENT_API_RETRY_BASE_DELAY_MS = 1500;
+    const AGENT_API_RETRY_MAX_DELAY_MS = 6000;
+    const AGENT_API_RETRY_AFTER_MAX_MS = 10000;
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: [
@@ -182,6 +190,8 @@
         runLogEnabledArg,
         bypassAuxRequestsArg,
         apiTimeoutSecondsArg,
+        apiRetryEnabledArg,
+        apiRetryAttemptsArg,
         extraBodyJsonArg,
         proxyUrlArg,
         proxyKeyArg,
@@ -201,6 +211,8 @@
         Risuai.getArgument('agents_run_log_enabled'),
         Risuai.getArgument('agents_bypass_aux_requests'),
         Risuai.getArgument('agents_api_timeout_seconds'),
+        Risuai.getArgument('agents_api_retry_enabled'),
+        Risuai.getArgument('agents_api_retry_attempts'),
         Risuai.getArgument('agents_extra_body_json'),
         Risuai.getArgument('agents_proxy_url'),
         Risuai.getArgument('agents_proxy_key'),
@@ -220,6 +232,8 @@
       const runLogEnabled = parseBool(preferArgumentValue(runLogEnabledArg, vault.runLogEnabled ?? false), false);
       const bypassAuxRequests = parseBool(preferArgumentValue(bypassAuxRequestsArg, vault.bypassAuxRequests ?? true), true);
       const apiTimeoutSeconds = normalizeApiTimeoutSeconds(preferArgumentValue(apiTimeoutSecondsArg, vault.apiTimeoutSeconds ?? DEFAULT_AGENT_API_TIMEOUT_SECONDS));
+      const apiRetryEnabled = parseBool(preferArgumentValue(apiRetryEnabledArg, vault.apiRetryEnabled ?? false), false);
+      const apiRetryAttempts = normalizeApiRetryAttempts(preferArgumentValue(apiRetryAttemptsArg, vault.apiRetryAttempts ?? DEFAULT_AGENT_API_RETRY_ATTEMPTS));
       const extraBodyJson = String(preferArgumentValue(extraBodyJsonArg, vault.extraBodyJson || '')).trim();
       const proxyUrl = normalizeProxyUrl(preferArgumentValue(proxyUrlArg, vault.proxyUrl || ''));
       const proxyKey = String(preferArgumentValue(proxyKeyArg, vault.proxyKey || '')).trim();
@@ -270,6 +284,8 @@
         runLogEnabled,
         bypassAuxRequests,
         apiTimeoutSeconds,
+        apiRetryEnabled,
+        apiRetryAttempts,
         extraBodyJson,
         proxyUrl,
         proxyKey,
@@ -384,6 +400,8 @@
         runLogEnabled: conf?.runLogEnabled === true,
         bypassAuxRequests: conf?.bypassAuxRequests !== false,
         apiTimeoutSeconds: normalizeApiTimeoutSeconds(conf?.apiTimeoutSeconds),
+        apiRetryEnabled: parseBool(conf?.apiRetryEnabled, false),
+        apiRetryAttempts: normalizeApiRetryAttempts(conf?.apiRetryAttempts),
         extraBodyJson: normalizeExtraBodyJson(conf?.extraBodyJson || ''),
         proxyUrl: normalizeProxyUrl(conf?.proxyUrl || ''),
         proxyKey: String(conf?.proxyKey || ''),
@@ -406,6 +424,131 @@
         return callVertexAgent(conf, messages);
       }
       return callOpenAICompatibleAgent(conf, messages);
+    }
+
+    async function callAgentWithRetry(conf, messages) {
+      const retryEnabled = conf?.apiRetryEnabled === true;
+      const retryAttempts = retryEnabled ? normalizeApiRetryAttempts(conf?.apiRetryAttempts) : 0;
+      const maxAttempts = retryAttempts + 1;
+      const retryErrors = [];
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const content = await callAgent(conf, messages);
+          return {
+            content,
+            attempts: attempt,
+            retryErrors,
+          };
+        } catch (err) {
+          const retryable = retryEnabled && shouldRetryAgentError(err);
+          const canRetry = retryable && attempt < maxAttempts;
+          const entry = agentRetryErrorEntry(err, attempt);
+
+          if (canRetry) {
+            const delayMs = agentRetryDelayMs(attempt, err);
+            retryErrors.push({ ...entry, delayMs });
+            if (conf?.debugLog) {
+              console.log(`Agents! retrying agent request after attempt ${attempt}/${maxAttempts}: ${entry.error} (${delayMs}ms)`);
+            }
+            await waitMs(delayMs);
+            continue;
+          }
+
+          const finalError = err instanceof Error
+            ? err
+            : createAgentRequestError(String(err || 'unknown error'));
+          finalError.attempts = attempt;
+          finalError.retryErrors = retryErrors.length || attempt > 1 ? retryErrors.concat(entry) : [];
+          throw finalError;
+        }
+      }
+
+      throw createAgentRequestError('Agent API retry loop ended unexpectedly');
+    }
+
+    function shouldRetryAgentError(err) {
+      return err?.retryable === true;
+    }
+
+    function agentRetryDelayMs(failedAttempt, err) {
+      if (Number.isFinite(err?.retryAfterMs) && err.retryAfterMs >= 0) {
+        return Math.min(AGENT_API_RETRY_AFTER_MAX_MS, Math.max(0, Math.round(err.retryAfterMs)));
+      }
+      const delay = AGENT_API_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, failedAttempt - 1));
+      return Math.min(AGENT_API_RETRY_MAX_DELAY_MS, delay);
+    }
+
+    function waitMs(ms) {
+      return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+    }
+
+    function agentRetryErrorEntry(err, attempt) {
+      const entry = {
+        attempt,
+        error: String(err?.message || err || 'unknown error').slice(0, 240),
+      };
+      if (Number.isFinite(Number(err?.status))) entry.status = Number(err.status);
+      if (err?.timeout === true) entry.timeout = true;
+      if (err?.network === true) entry.network = true;
+      return entry;
+    }
+
+    function agentRetryResultFields(source) {
+      const attempts = Math.max(1, parseInt(source?.attempts || '1', 10) || 1);
+      const retryErrors = Array.isArray(source?.retryErrors)
+        ? source.retryErrors.map(item => ({ ...item }))
+        : [];
+      return { attempts, retryErrors };
+    }
+
+    function createAgentRequestError(message, meta = {}) {
+      const err = new Error(message);
+      Object.keys(meta || {}).forEach((key) => {
+        if (meta[key] !== undefined) err[key] = meta[key];
+      });
+      return err;
+    }
+
+    function createAgentHttpError(label, res, errText) {
+      const status = Number(res?.status);
+      const body = String(errText || '').slice(0, 120);
+      const retryAfterMs = parseRetryAfterMs(getResponseHeader(res, 'Retry-After'));
+      return createAgentRequestError(`${label} ${status}: ${body}`, {
+        status,
+        retryable: isRetryableHttpStatus(status),
+        retryAfterMs,
+      });
+    }
+
+    function createRetryableAgentError(message, meta = {}) {
+      return createAgentRequestError(message, { ...meta, retryable: true });
+    }
+
+    function isRetryableHttpStatus(status) {
+      return status === 408 || status === 429 || (status >= 500 && status <= 599);
+    }
+
+    function getResponseHeader(res, name) {
+      try {
+        return res?.headers?.get?.(name) || '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function parseRetryAfterMs(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const seconds = Number(raw);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.min(AGENT_API_RETRY_AFTER_MAX_MS, seconds * 1000);
+      }
+      const dateMs = Date.parse(raw);
+      if (Number.isFinite(dateMs)) {
+        return Math.min(AGENT_API_RETRY_AFTER_MAX_MS, Math.max(0, dateMs - Date.now()));
+      }
+      return null;
     }
 
     function buildChatCompletionPayload(conf, messages) {
@@ -682,7 +825,7 @@
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Agent API ${res.status}: ${errText.slice(0, 120)}`);
+        throw createAgentHttpError('Agent API', res, errText);
       }
 
       const data = await res.json();
@@ -715,7 +858,7 @@
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Anthropic API ${res.status}: ${errText.slice(0, 120)}`);
+        throw createAgentHttpError('Anthropic API', res, errText);
       }
 
       const data = await res.json();
@@ -742,7 +885,7 @@
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Agent Platform (구 Vertex AI) API ${res.status}: ${errText.slice(0, 120)}`);
+        throw createAgentHttpError('Agent Platform (구 Vertex AI) API', res, errText);
       }
 
       const data = await res.json();
@@ -3935,6 +4078,7 @@
       const notes = Array.isArray(previousRun.notes) ? previousRun.notes : [];
       if (!notes.some(note => String(note?.content || '').trim())) return null;
       const preResults = Array.isArray(previousRun.preResults) ? previousRun.preResults : [];
+      if (preResults.some(result => result?.status === 'failed')) return null;
       if (!preResults.some(result => result?.status === 'success' || result?.status === 'skipped')) return null;
       return previousRun;
     }
@@ -4284,7 +4428,9 @@
           if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} prompt`, prompt, true);
 
           try {
-            const content = await callAgent(agentConf, prompt);
+            const agentCall = await callAgentWithRetry(agentConf, prompt);
+            const content = agentCall.content;
+            const retryLogFields = agentRetryResultFields(agentCall);
             if (conf.debugLog) logTextBlock(`Agents! debug: Row ${row + 1} ${agent.name} result`, content);
             if (agentMemory.enabled) {
               const parsed = parseMemoryAgentOutput(content);
@@ -4303,6 +4449,7 @@
                 }
                 return {
                   ...runAgentMeta(agent, conf),
+                  ...retryLogFields,
                   content: parsed.note || content,
                   ...(keepRunDetails ? {
                     rawOutput: content,
@@ -4321,6 +4468,7 @@
               if (conf.debugLog) console.log(`Agents! memory parse failed (${agent.name}); keeping previous memory`);
               return {
                 ...runAgentMeta(agent, conf),
+                ...retryLogFields,
                 content,
                 ...(keepRunDetails ? {
                   rawOutput: content,
@@ -4338,6 +4486,7 @@
             }
             return {
               ...runAgentMeta(agent, conf),
+              ...retryLogFields,
               content,
               ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
               status: 'success',
@@ -4345,9 +4494,11 @@
             };
           } catch (err) {
             const content = `(실패: ${err.message})`;
+            const retryLogFields = agentRetryResultFields(err);
             console.log(`Agents! pre-agent failed (${agent.name}): ${err.message}`);
             return {
               ...runAgentMeta(agent, conf),
+              ...retryLogFields,
               content,
               ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
               status: 'failed',
@@ -4493,12 +4644,15 @@
         if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
 
         try {
-          const rawOutput = String(await callAgent(agentConf, prompt) || '').trim();
+          const agentCall = await callAgentWithRetry(agentConf, prompt);
+          const retryLogFields = agentRetryResultFields(agentCall);
+          const rawOutput = String(agentCall.content || '').trim();
           if (rawOutput) {
             const nextResponse = applyPostAgentOutput(agent, currentResponse, rawOutput);
             if (keepRunDetails) {
               postResults.push({
                 ...runAgentMeta(agent, conf),
+                ...retryLogFields,
                 status: 'success',
                 inputResponse: currentResponse,
                 outputResponse: nextResponse,
@@ -4513,6 +4667,7 @@
             if (keepRunDetails) {
               postResults.push({
                 ...runAgentMeta(agent, conf),
+                ...retryLogFields,
                 status: 'empty',
                 inputResponse: currentResponse,
                 outputResponse: currentResponse,
@@ -4522,10 +4677,12 @@
             }
           }
         } catch (err) {
+          const retryLogFields = agentRetryResultFields(err);
           console.log(`Agents! post-agent failed (${agent.name}): ${err.message}`);
           if (keepRunDetails) {
             postResults.push({
               ...runAgentMeta(agent, conf),
+              ...retryLogFields,
               status: 'failed',
               failed: true,
               inputResponse: currentResponse,
@@ -5485,6 +5642,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         <span class="badge neutral">${escHtml(modeLabel)}</span>
         ${agent.mode === 'post' ? `<span class="badge neutral">${escHtml(postModeLabel(result?.postMode || agent.postMode))}</span>` : ''}
         ${resultBadge}
+        ${result?.attempts ? `<span class="badge neutral">시도 ${escHtml(result.attempts)}회</span>` : ''}
         ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
         ${Array.isArray(result?.cbsWarnings) && result.cbsWarnings.length ? `<span class="badge neutral">CBS 경고 ${escHtml(result.cbsWarnings.length)}</span>` : ''}
@@ -5501,6 +5659,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${runLogDetailBlockHtml('적용 후 응답', result, 'outputResponse', '(적용 후 응답 없음)')}
           ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
           ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
+          ${Array.isArray(result.retryErrors) && result.retryErrors.length ? detailBlockHtml('재시도 내역', formatRetryErrorsForDisplay(result.retryErrors)) : ''}
           ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
       }
@@ -5514,8 +5673,29 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${memoryUpdateBlock}
         ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', '(원본 출력 없음)', { fallbackField: 'content' })}
+        ${Array.isArray(result.retryErrors) && result.retryErrors.length ? detailBlockHtml('재시도 내역', formatRetryErrorsForDisplay(result.retryErrors)) : ''}
         ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
+    }
+
+    function formatRetryErrorsForDisplay(retryErrors) {
+      return (Array.isArray(retryErrors) ? retryErrors : []).map((item) => {
+        const attempt = parseInt(item?.attempt || '0', 10) || '?';
+        const status = Number.isFinite(Number(item?.status)) ? `HTTP ${Number(item.status)} · ` : '';
+        const flags = [
+          item?.timeout ? 'timeout' : '',
+          item?.network ? 'network' : '',
+        ].filter(Boolean);
+        const flagText = flags.length ? ` (${flags.join(', ')})` : '';
+        const delay = Number.isFinite(Number(item?.delayMs)) ? ` · 다음 시도 대기 ${formatRetryDelay(item.delayMs)}` : '';
+        return `${attempt}차 시도 실패: ${status}${String(item?.error || 'unknown error')}${flagText}${delay}`;
+      }).join('\n');
+    }
+
+    function formatRetryDelay(ms) {
+      const seconds = Number(ms) / 1000;
+      if (!Number.isFinite(seconds)) return '';
+      return seconds % 1 === 0 ? `${seconds.toFixed(0)}초` : `${seconds.toFixed(1)}초`;
     }
 
     function memoryUpdateFallbackText(result) {
@@ -5810,6 +5990,19 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         <input id="agents_api_timeout_seconds" type="number" min="30" max="600" step="1" value="${escHtml(conf.apiTimeoutSeconds)}">
       </div>
       <div class="example-url">각 에이전트 API 요청을 기다릴 최대 시간입니다. 기본값은 120초입니다.</div>
+      <div class="row2">
+        <div class="field">
+          <label for="agents_api_retry_enabled">에이전트 요청 재시도</label>
+          <select id="agents_api_retry_enabled">
+            <option value="false" ${!conf.apiRetryEnabled ? 'selected' : ''}>꺼짐 - 실패하면 즉시 해당 에이전트를 실패 처리</option>
+            <option value="true" ${conf.apiRetryEnabled ? 'selected' : ''}>켜짐 - 일시적 오류에서 같은 에이전트 요청을 다시 시도</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="agents_api_retry_attempts">추가 재시도 횟수</label>
+          <input id="agents_api_retry_attempts" type="number" min="0" max="5" step="1" value="${escHtml(conf.apiRetryAttempts)}">
+        </div>
+      </div>
       <div class="row2">
         <div class="field">
           <label for="agents_shortcut_settings">Agents! 설정 단축키</label>
@@ -6992,6 +7185,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         runLogEnabled: initialConf.runLogEnabled === true,
         bypassAuxRequests: parseBool(getInputValue('agents_bypass_aux_requests'), true),
         apiTimeoutSeconds: normalizeApiTimeoutSeconds(getInputValue('agents_api_timeout_seconds')),
+        apiRetryEnabled: parseBool(getInputValue('agents_api_retry_enabled'), false),
+        apiRetryAttempts: normalizeApiRetryAttempts(getInputValue('agents_api_retry_attempts')),
         shortcuts: normalizeShortcutConfig({
           settings: getInputValue('agents_shortcut_settings'),
           runInspector: getInputValue('agents_shortcut_run_inspector'),
@@ -7019,6 +7214,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       await Risuai.setArgument('agents_run_log_enabled', String(conf.runLogEnabled === true));
       await Risuai.setArgument('agents_bypass_aux_requests', String(conf.bypassAuxRequests));
       await Risuai.setArgument('agents_api_timeout_seconds', String(conf.apiTimeoutSeconds));
+      await Risuai.setArgument('agents_api_retry_enabled', String(conf.apiRetryEnabled === true));
+      await Risuai.setArgument('agents_api_retry_attempts', String(conf.apiRetryAttempts));
       await Risuai.setArgument('agents_extra_body_json', conf.extraBodyJson || '');
       await Risuai.setArgument('agents_proxy_url', conf.proxyUrl || '');
       await Risuai.setArgument('agents_proxy_key', conf.proxyKey || '');
@@ -7274,7 +7471,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }, 'Agent Platform access token', conf);
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Agent Platform (구 Vertex AI) access token 발급 실패: HTTP ${res.status}: ${errText.slice(0, 180)}`);
+        throw createAgentHttpError('Agent Platform (구 Vertex AI) access token 발급 실패: HTTP', res, errText.slice(0, 180));
       }
 
       const data = await res.json();
@@ -7408,7 +7605,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       let timeoutId = null;
       const timeoutSeconds = normalizeApiTimeoutSeconds(conf?.apiTimeoutSeconds);
       const timeoutMs = timeoutSeconds * 1000;
-      const timeoutError = () => new Error(`${label} timed out after ${timeoutSeconds}s`);
+      const timeoutError = () => createRetryableAgentError(`${label} timed out after ${timeoutSeconds}s`, { timeout: true });
 
       try {
         if (controller) {
@@ -7429,7 +7626,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ]);
       } catch (err) {
         if (controller?.signal?.aborted || err?.name === 'AbortError') throw timeoutError();
-        throw err;
+        if (err?.retryable === true) throw err;
+        const message = err?.message ? `${label} failed: ${err.message}` : `${label} failed`;
+        throw createRetryableAgentError(message, { network: true });
       } finally {
         if (timeoutId !== null) clearTimeout(timeoutId);
       }
@@ -7450,6 +7649,16 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const parsed = raw ? parseInt(raw, 10) : fallbackSeconds;
       if (!Number.isFinite(parsed)) return DEFAULT_AGENT_API_TIMEOUT_SECONDS;
       return Math.min(MAX_AGENT_API_TIMEOUT_SECONDS, Math.max(MIN_AGENT_API_TIMEOUT_SECONDS, parsed));
+    }
+
+    function normalizeApiRetryAttempts(value, fallback = DEFAULT_AGENT_API_RETRY_ATTEMPTS) {
+      const fallbackAttempts = Number.isFinite(Number(fallback))
+        ? Number(fallback)
+        : DEFAULT_AGENT_API_RETRY_ATTEMPTS;
+      const raw = String(value ?? '').trim();
+      const parsed = raw ? parseInt(raw, 10) : fallbackAttempts;
+      if (!Number.isFinite(parsed)) return DEFAULT_AGENT_API_RETRY_ATTEMPTS;
+      return Math.min(MAX_AGENT_API_RETRY_ATTEMPTS, Math.max(MIN_AGENT_API_RETRY_ATTEMPTS, parsed));
     }
 
     function parseBool(value, fallback) {
