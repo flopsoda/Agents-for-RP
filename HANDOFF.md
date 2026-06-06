@@ -72,6 +72,15 @@ Recent completed changes:
   - Did not auto-migrate existing legal timeout values such as `30`.
   - Kept `//@version 1.1.11` unchanged.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Added Custom 1-6 provider key slots in `risu_agents.js`.
+  - Kept the existing internal `custom` provider ID and relabeled it as `Custom 1`.
+  - Added `custom-2` through `custom-6` as supported OpenAI-compatible custom provider slots.
+  - Made Model Presets and Provider API Keys dropdowns show `Custom 1` through `Custom 6`.
+  - Preserved separate stored keys such as `providerKeys.custom` and `providerKeys.custom-2`.
+  - Prevented unsupported arbitrary provider IDs from being saved as unlimited custom slots; unknown preset providers fold to `custom`.
+  - Updated preset list, key editor, preset test, and missing-key runtime messages to show friendly provider labels.
+  - Kept `//@version 1.1.11` unchanged.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -136,6 +145,13 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - JavaScriptCore resolver scenario checks passed for timeout, retry attempts, and context window arg `0` fallback behavior.
+- For Custom 1-6 provider key slots:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - JavaScriptCore custom slot scenario checks passed for `Custom 1`/`Custom 6` labels, `custom-2` preservation, separate `custom`/`custom-2` key lookup, `custom_3` normalization, unknown provider folding, and custom slots using no fixed provider defaults.
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+  - In-app RisuAI settings UI smoke check was not run because no RisuAI browser harness/dev server is available in this repo.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -150,8 +166,9 @@ Commits:
 - `91ac884 Update main model default check instruction`
 - `aca07b4 Show agent durations in run inspector`
 - `33f7163 Fix numeric arg fallback handling`
+- `ba34471 Add custom provider key slots`
 
 Release status:
 - User previously said not to release yet.
-- No version bump, tag, push, or GitHub Release was created for these changes.
+- No version bump, tag, push, or GitHub Release was created for these changes, including the Custom 1-6 provider key slot change.
 - Release/update is still pending user decision.
