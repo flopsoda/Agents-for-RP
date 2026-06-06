@@ -4,7 +4,7 @@
 //@version 1.1.11
 //@update-url https://raw.githubusercontent.com/flopsoda/Agents-for-RP/main/risu_agents.js
 //@arg agents_provider string Analysis agent provider label. e.g. openai
-//@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Vertex AI OpenAI-compatible endpoint
+//@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Agent Platform (구 Vertex AI) OpenAI-compatible endpoint
 //@arg agents_api_key string Analysis agent API key
 //@arg agents_model string Analysis agent model. e.g. gpt-4o-mini
 //@arg agents_temperature string Analysis agent temperature (default: 0.7)
@@ -647,7 +647,7 @@
         openai: 'OpenAI',
         claude: 'Claude',
         google: 'Google Gemini',
-        'vertex-ai': 'Vertex Gemini',
+        'vertex-ai': 'Agent Platform Gemini',
         deepseek: 'DeepSeek',
       };
       return names[normalizeProviderValue(provider)] || 'Model Preset';
@@ -728,7 +728,7 @@
       const payload = buildChatCompletionPayload(conf, messages);
 
       const url = `${baseUrl}/chat/completions`;
-      logAgentFetch(conf, 'Vertex chat/completions start', url, payload);
+      logAgentFetch(conf, 'Agent Platform chat/completions start', url, payload);
       const res = await nativeFetchWithTimeout(url, {
         method: 'POST',
         headers: {
@@ -736,12 +736,12 @@
           'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(payload),
-      }, 'Vertex chat/completions', conf);
-      logAgentFetch(conf, `Vertex chat/completions response ${res.status}`, url);
+      }, 'Agent Platform chat/completions', conf);
+      logAgentFetch(conf, `Agent Platform chat/completions response ${res.status}`, url);
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Vertex AI API ${res.status}: ${errText.slice(0, 120)}`);
+        throw new Error(`Agent Platform (구 Vertex AI) API ${res.status}: ${errText.slice(0, 120)}`);
       }
 
       const data = await res.json();
@@ -6732,7 +6732,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const file = event.target.files?.[0];
           if (!file) return;
           providerKeysState[provider] = await file.text();
-          showMsg('Vertex AI JSON credential을 불러왔습니다.', true);
+          showMsg('Agent Platform (구 Vertex AI) JSON credential을 불러왔습니다.', true);
           renderProviderKeyEditor();
         });
 
@@ -7009,9 +7009,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const vertexCredential = parseVertexCredential(conf.apiKey);
         const baseUrl = resolveVertexBaseUrl(conf.baseUrl, vertexCredential);
         const url = `${baseUrl}/chat/completions`;
-        logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Vertex token start', 'https://oauth2.googleapis.com/token');
+        logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Agent Platform token start', 'https://oauth2.googleapis.com/token');
         await getVertexAccessToken(conf.apiKey, conf);
-        logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Vertex token response 200', 'https://oauth2.googleapis.com/token');
+        logAgentFetch({ ...conf, debugLog: true }, 'LLM auth test Agent Platform token response 200', 'https://oauth2.googleapis.com/token');
         return { status: 200, url };
       }
 
@@ -7122,7 +7122,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         { value: 'openai', label: 'OpenAI' },
         { value: 'google', label: 'Google' },
         { value: 'claude', label: 'Claude' },
-        { value: 'vertex-ai', label: 'Vertex AI' },
+        { value: 'vertex-ai', label: 'Agent Platform (구 Vertex AI)' },
         { value: 'deepseek', label: 'DeepSeek' },
         { value: 'ollama', label: 'Ollama (웹판은 Proxy 권장)' },
         { value: 'custom', label: 'Custom' },
@@ -7191,12 +7191,12 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       let resolved = normalizeUrl(baseUrl);
       if (resolved.includes('PROJECT_ID')) {
         if (!projectId) {
-          throw new Error('Vertex AI Base URL의 PROJECT_ID를 치환할 수 없습니다: service account JSON의 project_id가 없습니다.');
+          throw new Error('Agent Platform (구 Vertex AI) Base URL의 PROJECT_ID를 치환할 수 없습니다: service account JSON의 project_id가 없습니다.');
         }
         resolved = resolved.replace(/PROJECT_ID/g, encodeURIComponent(projectId));
       }
       if (resolved.includes('PROJECT_ID')) {
-        throw new Error('Vertex AI Base URL의 PROJECT_ID를 치환할 수 없습니다.');
+        throw new Error('Agent Platform (구 Vertex AI) Base URL의 PROJECT_ID를 치환할 수 없습니다.');
       }
       return resolved;
     }
@@ -7228,14 +7228,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
-      }, 'Vertex AI access token', conf);
+      }, 'Agent Platform access token', conf);
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Vertex AI access token 발급 실패: HTTP ${res.status}: ${errText.slice(0, 180)}`);
+        throw new Error(`Agent Platform (구 Vertex AI) access token 발급 실패: HTTP ${res.status}: ${errText.slice(0, 180)}`);
       }
 
       const data = await res.json();
-      if (!data.access_token) throw new Error('Vertex AI access token 응답이 비어 있습니다.');
+      if (!data.access_token) throw new Error('Agent Platform (구 Vertex AI) access token 응답이 비어 있습니다.');
       vertexTokenCache = {
         source: text,
         token: data.access_token,
@@ -7246,7 +7246,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
     async function signRs256(input, privateKeyPem) {
       const cryptoApi = globalThis.crypto?.subtle;
-      if (!cryptoApi) throw new Error('이 환경에서는 WebCrypto 서명을 사용할 수 없어 Vertex AI Lite 호출을 실행할 수 없습니다.');
+      if (!cryptoApi) throw new Error('이 환경에서는 WebCrypto 서명을 사용할 수 없어 Agent Platform (구 Vertex AI) Lite 호출을 실행할 수 없습니다.');
 
       const key = await cryptoApi.importKey(
         'pkcs8',
