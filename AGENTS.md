@@ -69,16 +69,26 @@ This project targets RisuAI plugin development. Use the local reference files in
 
 ## Handoff Summary Workflow
 
-- If the user provides a previous handoff summary, preserve it as working context.
-- After completing a feature, bug fix, refactor, documentation update, or other concrete project change, update that handoff summary before finishing.
-- If no previous handoff summary was provided, create a fresh handoff summary for the completed work.
-- Write the handoff summary inside a Markdown code block so the user can pass it to another chat easily.
-- Keep the summary concise, but include:
+- Maintain root-level `HANDOFF.md` as the canonical handoff summary for unreleased work.
+- At the start of any feature, bug fix, refactor, documentation update, or release task:
+  - Read `HANDOFF.md` if it exists.
+  - Inspect recent git history with `git log --oneline` so unreleased commits are not dropped.
+- If `HANDOFF.md` is missing but the user provides a previous handoff summary, create `HANDOFF.md` from that summary before finishing the change.
+- After completing and committing a concrete project change:
+  - Update `HANDOFF.md` by preserving prior unreleased entries and appending the new completed work.
+  - Commit the `HANDOFF.md` update as a separate documentation commit unless the user explicitly says not to commit.
+  - Handoff maintenance commits do not need to list their own commit hash in `HANDOFF.md`; avoid recursive handoff-only commits.
+- In final responses after concrete changes, include the current `HANDOFF.md` contents inside a Markdown code block instead of generating a fresh summary that may omit prior unreleased changes.
+- Keep `HANDOFF.md` concise, but include:
   - What changed
   - Files touched
   - Tests/checks run and any checks that could not be run
   - Commit hash/message if a commit was created
   - Release status, including whether version bump, tag, push, or GitHub Release was intentionally skipped
+- During release/update workflow:
+  - Use `HANDOFF.md` as the source for release notes.
+  - In the version bump release commit, reset `HANDOFF.md` to an empty/no-pending state such as `No pending unreleased changes since vX.Y.Z`.
+  - Tag the release commit after the reset is included.
 
 ## Documentation Policy
 
