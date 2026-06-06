@@ -58,6 +58,13 @@ Recent completed changes:
   - Changed `위 분석을 참고하여 최종 RP 응답을 작성하세요.` to `위 분석을 반영하여 최종 RP 응답을 작성하세요.`
   - Existing saved pipeline-specific custom instructions remain unchanged.
   - No new RisuAI API was needed.
+- Added per-agent duration display to Run Inspector in `risu_agents.js`.
+  - Stored `startedAt`, `finishedAt`, and `durationMs` on actual pre/post-agent run results.
+  - Included retry/backoff, prompt rendering, and memory load/save time in the per-agent duration.
+  - Displayed duration on Run Inspector agent cards and detail badges.
+  - Hid duration for reused pre-agent results and old logs without timing fields.
+  - Kept `RUN_LOG_VERSION` and `//@version 1.1.11` unchanged.
+  - Checked `docs/risuai/types/risuai.d.ts`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -112,6 +119,11 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+- For Run Inspector per-agent duration display:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - Static review confirmed `RUN_LOG_VERSION` stayed unchanged, reused results hide duration, and old logs without `durationMs` render without a duration badge.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -124,6 +136,7 @@ Commits:
 - `d103559 Translate runtime prompt scaffold`
 - `c91209e Add agent API retry settings`
 - `91ac884 Update main model default check instruction`
+- `aca07b4 Show agent durations in run inspector`
 
 Release status:
 - User previously said not to release yet.
