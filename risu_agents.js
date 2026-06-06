@@ -1043,7 +1043,6 @@
           'selectedPersona',
           'modules',
           'enabledModules',
-          'globalChatVariables',
         ]);
         dbAvailable = Boolean(db);
       } catch (err) {
@@ -1394,7 +1393,7 @@
         userName: user.name,
         userSource: user.source,
         chatVars: normalizeAgentCbsChatVars(chat?.scriptstate),
-        globalVars: normalizeAgentCbsChatVars(db?.globalChatVariables),
+        globalVars: {},
         defaultVars: parseAgentCbsDefaultVariables(character?.defaultVariables),
         randomSeedText: `${String(character?.chaId ?? '')}${String(chat?.id ?? '')}`,
         randomMessageCount: messageCount,
@@ -1812,6 +1811,11 @@
         const condition = statement.pop();
         const operator = normalizeAgentCbsName(statement.pop());
         switch (operator) {
+          case 'toggle':
+          case 'tis':
+          case 'tisnot':
+            recordAgentCbsWarning(state, '토글 상태를 Plugin API v3에서 읽을 수 없어 토글 조건부 CBS 블록을 제거했습니다.');
+            return { type: 'remove' };
           case 'not':
             statement.push(agentCbsTruthy(condition) ? '0' : '1');
             break;
@@ -1889,6 +1893,7 @@
         : '';
       const block = match.start.block;
       switch (block.type) {
+        case 'remove':
         case 'ignore':
           return '';
         case 'parse':
