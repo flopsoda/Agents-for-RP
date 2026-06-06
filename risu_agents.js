@@ -151,6 +151,7 @@
     };
     const PIPELINE_ROW_COUNT = 9;
     const MAIN_ROW_INDEX = 4;
+    const MAIN_MODEL_SELECTION_ID = '__agents_main_model__';
     const AGENTS_CONFIG_VAULT_KEY = 'risu_agents_config_vault_v1';
     const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
@@ -2520,11 +2521,13 @@
 
     // ── 동적 파이프라인 ───────────────────────────────────────────────────────
 
-    const PIPELINE_CONFIG_VERSION = 2;
+    const PIPELINE_CONFIG_VERSION = 3;
     const POST_MODE_POLISH = 'polish';
     const POST_MODE_PREFIX = 'prefix';
     const POST_MODE_SUFFIX = 'suffix';
     const POST_MODES = [POST_MODE_POLISH, POST_MODE_PREFIX, POST_MODE_SUFFIX];
+    const DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION =
+      '위 분석을 참고하여 세계관 위반, 플롯 역행, OOC 오류를 감지하고 수정한 뒤 최종 RP 응답을 작성하세요.';
     const DEFAULT_OUTPUT_PRE =
       '간결한 불릿 포인트로 관찰과 제안만 정리하세요. 실제 RP 본문이나 최종 응답 문장은 작성하지 마세요.';
     const DEFAULT_OUTPUT_POST_POLISH =
@@ -2646,6 +2649,7 @@
     function createEmptyPipeline() {
       return {
         version: PIPELINE_CONFIG_VERSION,
+        mainModel: normalizeMainModelConfig(null),
         rows: Array.from({ length: PIPELINE_ROW_COUNT }, (_, row) => ({
           row,
           label: row === MAIN_ROW_INDEX ? 'Main Model' : `Row ${row + 1}`,
@@ -2660,6 +2664,16 @@
         pipeline.rows[preset.row].agents.push(normalizeAgent(preset, preset.row, preset.column, null));
       });
       return normalizePipelineConfig(pipeline);
+    }
+
+    function normalizeMainModelConfig(raw) {
+      const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const hasCheckInstruction = Object.prototype.hasOwnProperty.call(source, 'checkInstruction');
+      return {
+        checkInstruction: hasCheckInstruction
+          ? String(source.checkInstruction ?? '')
+          : DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION,
+      };
     }
 
     function cloneJson(value) {
@@ -2834,6 +2848,7 @@
     function normalizePipelineConfig(raw, modelPresets = null) {
       const fallback = createEmptyPipeline();
       const sourceRows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
+      fallback.mainModel = normalizeMainModelConfig(raw?.mainModel);
 
       for (let row = 0; row < PIPELINE_ROW_COUNT; row += 1) {
         const sourceRow = sourceRows.find(r => Number(r?.row) === row) || sourceRows[row] || {};
@@ -4558,20 +4573,23 @@
 
     // ── 컨텍스트 주입 ─────────────────────────────────────────────────────────
 
-    function injectAgentNotes(messages, orderedNotes) {
+    function injectAgentNotes(messages, orderedNotes, mainModelConfig = null) {
       if (!orderedNotes || orderedNotes.length === 0) return messages;
+      const checkInstruction = String(normalizeMainModelConfig(mainModelConfig).checkInstruction || '').trim();
 
-      const injection = [
+      const injectionParts = [
         '',
         '---',
         '[Agents! 분석 컨텍스트]',
         '',
         formatAgentNotes(orderedNotes, '(에이전트 노트 없음)'),
         '',
-        '[검수 지침]',
-        '위 분석을 참고하여 세계관 위반, 플롯 역행, OOC 오류를 감지하고 수정한 뒤 최종 RP 응답을 작성하세요.',
-        '---',
-      ].join('\n');
+      ];
+      if (checkInstruction) {
+        injectionParts.push('[검수 지침]', checkInstruction, '');
+      }
+      injectionParts.push('---');
+      const injection = injectionParts.join('\n');
 
       const lastSystemIdx = findLastIndex(messages, m => m.role === 'system');
       if (lastSystemIdx >= 0) {
@@ -5124,6 +5142,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .inspector-shell .pipeline-row{grid-template-columns:92px minmax(0,1fr)}
 .inspector-shell .pipeline-row.post-filled{grid-template-columns:92px minmax(0,1fr)}
 .pipeline-row.main{border-color:#555;background:#1f1f1f}
+.pipeline-row.main.editable-main{cursor:pointer;transition:border-color .14s ease,background .14s ease,transform .14s ease}
+.pipeline-row.main.editable-main:hover,.pipeline-row.main.editable-main.selected{border-color:var(--red);background:var(--red-soft)}
+.pipeline-row.main.editable-main:hover{transform:translateY(-1px)}
 .row-label{font-size:.77rem;color:#e8e8e8;font-weight:800}.row-kind{font-size:.68rem;color:var(--muted-2);margin-top:2px}
 .agent-lane{display:flex;gap:8px;flex-wrap:wrap;min-height:38px;align-items:center}
 .post-agent-lane{justify-content:center}
@@ -6284,7 +6305,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
         root.innerHTML = pipelineState.rows.map((row) => {
           if (row.row === MAIN_ROW_INDEX) {
-            return `<div class="pipeline-row main">
+            const selected = selectedAgentId === MAIN_MODEL_SELECTION_ID ? ' selected' : '';
+            return `<div class="pipeline-row main editable-main${selected}" data-main-model="true">
               <div><div class="row-label">Row ${row.row + 1}</div><div class="row-kind">Fixed</div></div>
               <div class="main-model-label">Main Model</div>
             </div>`;
@@ -6305,6 +6327,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
         root.querySelectorAll('[data-add-row]').forEach((button) => {
           button.addEventListener('click', () => addAgentToRow(parseInt(button.getAttribute('data-add-row'), 10)));
+        });
+        root.querySelector('[data-main-model]')?.addEventListener('click', () => {
+          selectedAgentId = MAIN_MODEL_SELECTION_ID;
+          renderPipeline();
+          renderAgentEditor();
         });
         root.querySelectorAll('[data-agent-id]').forEach((card) => {
           card.addEventListener('click', () => {
@@ -6333,6 +6360,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       function renderAgentEditor() {
         const root = document.getElementById('agent-editor');
         if (!root) return;
+        if (selectedAgentId === MAIN_MODEL_SELECTION_ID) {
+          renderMainModelEditor(root);
+          return;
+        }
         const agent = findAgentById(pipelineState, selectedAgentId);
         if (!agent) {
           root.innerHTML = `<h2>Agent Editor</h2>
@@ -6381,6 +6412,18 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           </div>`;
 
         bindEditorFields(agent);
+      }
+
+      function renderMainModelEditor(root) {
+        pipelineState.mainModel = normalizeMainModelConfig(pipelineState.mainModel);
+        root.innerHTML = `<h2>Main Model Editor</h2>
+          <div class="field"><label for="edit_main_checkInstruction">검수 지침</label><textarea id="edit_main_checkInstruction">${escHtml(pipelineState.mainModel.checkInstruction)}</textarea></div>`;
+        document.getElementById('edit_main_checkInstruction')?.addEventListener('input', (event) => {
+          pipelineState.mainModel = normalizeMainModelConfig({
+            ...pipelineState.mainModel,
+            checkInstruction: event.target.value,
+          });
+        });
       }
 
       function bindEditorFields(agent) {
@@ -7553,7 +7596,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           lastPipelineRun.cbsContext = runContext.cbsContext;
           lastPipelineRun.cbsContextHash = hashAgentCbsContext(runContext.cbsContext);
           lastPipelineRun.cbsWarnings = mergeAgentCbsWarnings(lastPipelineRun.cbsWarnings || []);
-          const injectedMessages = injectAgentNotes(messages, lastPipelineRun.notes);
+          const injectedMessages = injectAgentNotes(messages, lastPipelineRun.notes, pipeline.mainModel);
           await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
           if (conf.debugLog) {
             console.log(`Agents! debug: pre-agent results reused from ${lastPipelineRun.preReusedFrom || '(unknown time)'}`);
@@ -7595,7 +7638,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         }
 
         const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey, runContext);
-        const injectedMessages = injectAgentNotes(messages, notes);
+        const injectedMessages = injectAgentNotes(messages, notes, pipeline.mainModel);
         await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
         if (conf.debugLog) logPromptFlow('Agents! debug: messages sent to main LLM after injection', injectedMessages, true);
         return injectedMessages;
