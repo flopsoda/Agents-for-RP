@@ -81,6 +81,14 @@ Recent completed changes:
   - Updated preset list, key editor, preset test, and missing-key runtime messages to show friendly provider labels.
   - Kept `//@version 1.1.11` unchanged.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Prevented unresolved Risu prompt-toggle CBS blocks from leaking lorebook text in `risu_agents.js`.
+  - Removed undocumented `globalChatVariables` from the `getDatabase()` include list.
+  - Stopped reading `db.globalChatVariables`; global CBS values now default to an empty object because prompt toggles are not exposed by the documented Plugin API v3 database keys.
+  - Added conservative `#when` handling for `toggle`, `tis`, and `tisnot` operators.
+  - When those operators are encountered, the plugin removes the whole conditional block, including any `{{:else}}` branch, and records a CBS warning for Run Inspector.
+  - Kept existing non-toggle `#when` comparisons such as `is`, `isnot`, `>`, and `<` unchanged.
+  - Kept `//@version 1.1.11` unchanged.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -152,6 +160,12 @@ Validation:
   - JavaScriptCore custom slot scenario checks passed for `Custom 1`/`Custom 6` labels, `custom-2` preservation, separate `custom`/`custom-2` key lookup, `custom_3` normalization, unknown provider folding, and custom slots using no fixed provider defaults.
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
   - In-app RisuAI settings UI smoke check was not run because no RisuAI browser harness/dev server is available in this repo.
+- For prompt-toggle CBS lore block removal:
+  - `git diff --check -- risu_agents.js` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - JavaScriptCore CBS scenario checks passed for `toggle`, `tis`, `tisnot`, `toggle` with `{{:else}}`, `toggle` combined with `or`, and existing `is`, `isnot`, `>`, and `<` behavior.
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -167,8 +181,9 @@ Commits:
 - `aca07b4 Show agent durations in run inspector`
 - `33f7163 Fix numeric arg fallback handling`
 - `ba34471 Add custom provider key slots`
+- `37fec79 Remove unresolved toggle CBS lore blocks`
 
 Release status:
 - User previously said not to release yet.
-- No version bump, tag, push, or GitHub Release was created for these changes, including the Custom 1-6 provider key slot change.
+- No version bump, tag, push, or GitHub Release was created for these changes, including the Custom 1-6 provider key slot change and prompt-toggle CBS lore block removal.
 - Release/update is still pending user decision.
