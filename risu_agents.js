@@ -154,6 +154,7 @@
     const AGENTS_CONFIG_VAULT_KEY = 'risu_agents_config_vault_v1';
     const AGENTS_CONFIG_VAULT_VERSION = 1;
     let lastPipelineRun = null;
+    let lastPipelineContext = null;
     let configCache = null;
     let pipelinePresetStoreCache = null;
     let shortcutConfigCache = normalizeShortcutConfig(null);
@@ -780,7 +781,7 @@
       const contextMessages = chatContext?.available === true && Array.isArray(chatContext?.messages)
         ? chatContext.messages
         : normalizeRequestMessages(requestMessages);
-      const maxWindow = Math.max(1, maxPreAgentContextWindow(pipeline, conf) || conf?.window || 10);
+      const maxWindow = Math.max(1, maxAgentContextWindow(pipeline, conf) || conf?.window || 10);
       const currentChatContext = await loadCurrentChatForSettings(sources.character, conf?.debugLog);
       const loreCandidates = collectLorebookCandidates(sources.character, sources.db, currentChatContext);
       const loreMatch = matchActiveLorebooksLikeRisu(contextMessages, loreCandidates, {
@@ -3026,10 +3027,10 @@
       if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
         sections.push(`[글로벌 노트 덮어쓰기]\n${context.globalNoteReplacement}`);
       }
-      if (agent.mode === 'pre' && agent.includeHistory) {
+      if (agent.includeHistory) {
         sections.push(`[최근 대화]\n${context.history || '(최근 대화 없음)'}`);
       }
-      if (agent.mode === 'pre' && agent.includeUserInput) {
+      if (agent.includeUserInput) {
         sections.push(`[현재 유저 입력]\n${context.userInput || '(현재 유저 입력 없음)'}`);
       }
       if (agent.includePreviousNotes) {
@@ -3853,9 +3854,10 @@
       return maxWindow;
     }
 
-    function maxPreAgentContextWindow(pipeline, conf) {
+    function maxAgentContextWindow(pipeline, conf) {
       let maxWindow = 0;
-      for (let row = 0; row < MAIN_ROW_INDEX; row += 1) {
+      for (let row = 0; row < PIPELINE_ROW_COUNT; row += 1) {
+        if (row === MAIN_ROW_INDEX) continue;
         getEnabledAgentsForRow(pipeline, row).forEach((agent) => {
           const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
           const window = Math.max(1, parseInt(preset?.contextWindow || conf.window, 10) || conf.window || 10);
@@ -4394,7 +4396,7 @@
       return notes;
     }
 
-    async function runPostPipeline(content, conf, pipeline, type) {
+    async function runPostPipeline(content, conf, pipeline, type, transientContext = null) {
       let currentResponse = String(content ?? '');
       const keepRunDetails = isRunLogEnabled(conf);
       const previousRun = lastPipelineRun || {
@@ -4447,9 +4449,15 @@
           }
           continue;
         }
+        const history = transientContext?.runContext?.historyForWindow
+          ? transientContext.runContext.historyForWindow(agentConf.window)
+          : '';
+        const userInput = String(transientContext?.userInput || previousRun.userInput || '');
         const rawPrompt = buildAgentPrompt(agent, {
           settingBlocks: previousRun.settingBlocks,
           globalNoteReplacement: previousRun.globalNoteReplacement || '',
+          history,
+          userInput,
           notes: previousRun.notes,
           currentResponse,
         });
@@ -7525,6 +7533,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const runScope = await getAgentMemoryScope(conf.debugLog);
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
         const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
+        const userInput = getUserInput(chatContext.messages);
+        lastPipelineContext = {
+          type,
+          chatContext,
+          runContext,
+          userInput,
+        };
         const settingBlocks = runContext.settingBlocks;
         const runLogEnabled = isRunLogEnabled(conf);
         const preReuseKey = runLogEnabled
@@ -7551,7 +7566,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           && !hasMissingModelPresetForRows(pipeline, conf, 0, MAIN_ROW_INDEX - 1)) {
           console.log('Agents!: provider API key not set — pre-agent pipeline skipped');
           lastPipelineRun = createRunLogBase(type, pipeline, conf, runScope, 'skipped', 'pre-agent provider API key not set');
-          lastPipelineRun.userInput = getUserInput(chatContext.messages);
+          lastPipelineRun.userInput = userInput;
           lastPipelineRun.settingBlocks = settingBlocks.content;
           lastPipelineRun.settingBlockStats = settingBlocks.stats;
           lastPipelineRun.globalNoteReplacement = runContext.globalNoteReplacement;
@@ -7576,7 +7591,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           logPromptFlow('Agents! debug: messages used by Agents! context', chatContext.messages, true);
           logTextBlock('Agents! debug: setting blocks passed to agents', settingBlocks.content);
           logSettingBlockStats(settingBlocks.stats);
-          logTextBlock('Agents! debug: current user input passed to agents', getUserInput(chatContext.messages));
+          logTextBlock('Agents! debug: current user input passed to agents', userInput);
         }
 
         const notes = await runPrePipeline(messages, chatContext, conf, pipeline, settingBlocks, type, runScope, preReuseKey, runContext);
@@ -7589,6 +7604,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         // 에러 시 원본 메시지 그대로 통과 (파이프라인 실패가 채팅을 막지 않도록)
         console.log(`Agents! pipeline error: ${err.message}`);
         lastPipelineRun = null;
+        lastPipelineContext = null;
         return messages;
       }
     });
@@ -7601,7 +7617,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           if (conf.debugLog) console.log(`Agents! afterRequest bypassed: ${bypassReason}`);
           return content;
         }
-        if (!lastPipelineRun) return content;
+        if (!lastPipelineRun) {
+          lastPipelineContext = null;
+          return content;
+        }
 
         const pipeline = await getPipelineConfig(conf);
         const hasPostAgents = pipeline.rows
@@ -7614,6 +7633,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             if (isRunLogEnabled(conf)) lastPipelineRun.finalResponse = String(content ?? '');
             await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
             if (!isRunLogEnabled(conf)) lastPipelineRun = null;
+            lastPipelineContext = null;
           }
           return content;
         }
@@ -7627,6 +7647,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             if (isRunLogEnabled(conf)) lastPipelineRun.finalResponse = String(content ?? '');
             await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
             if (!isRunLogEnabled(conf)) lastPipelineRun = null;
+            lastPipelineContext = null;
           }
           return content;
         }
@@ -7636,13 +7657,15 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           logTextBlock('Agents! debug: main model response before post-agents', content);
         }
 
-        const finalContent = await runPostPipeline(content, conf, pipeline, type);
+        const finalContent = await runPostPipeline(content, conf, pipeline, type, lastPipelineContext);
         await persistRunLog(lastPipelineRun, conf.debugLog, conf.runLogEnabled);
         if (!isRunLogEnabled(conf)) lastPipelineRun = null;
+        lastPipelineContext = null;
         if (conf.debugLog) logTextBlock('Agents! debug: final response after post-agents', finalContent);
         return finalContent;
       } catch (err) {
         console.log(`Agents! afterRequest pipeline error: ${err.message}`);
+        lastPipelineContext = null;
         return content;
       }
     });
