@@ -45,6 +45,15 @@ Recent completed changes:
   - Left user-editable/stored agent prompts unchanged, including `DEFAULT_AGENT_PRESETS`, `DEFAULT_OUTPUT_PRE`, `DEFAULT_OUTPUT_POST_*`, `defaultSystemPromptForMode()`, and the Row 5 default check instruction.
   - Kept UI labels, buttons, toast text, Run Inspector text, and prompt-preview placeholder explanations in Korean.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Added optional agent API retry settings in `risu_agents.js`.
+  - Added `agents_api_retry_enabled` and `agents_api_retry_attempts` plugin arguments.
+  - Added common settings UI controls under `Agent API Timeout (초)`.
+  - Defaulted retry off, with two additional attempts when enabled and a clamped `0-5` attempt range.
+  - Retried only transient agent call failures: network/fetch errors, timeout, HTTP `408`, `429`, and `5xx`.
+  - Used internal backoff of `1.5s -> 3s -> 6s`, with `Retry-After` honored up to `10s`.
+  - Stored `attempts` and `retryErrors` in Run Inspector result details without changing note/prompt text.
+  - Prevented pre-agent reuse when a previous pre-agent result has `status: failed`.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -89,6 +98,11 @@ Validation:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
   - Static scan confirmed remaining Korean prompt strings are in intentionally excluded saved defaults, UI text, or prompt-preview placeholders.
+- For agent API retry settings:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -99,6 +113,7 @@ Commits:
 - `c25b221 Customize main model check instruction`
 - `25362c3 Simplify main model default instruction`
 - `d103559 Translate runtime prompt scaffold`
+- `c91209e Add agent API retry settings`
 
 Release status:
 - User previously said not to release yet.
