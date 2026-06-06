@@ -40,6 +40,11 @@ Recent completed changes:
   - Changed the default from explicit world/plot/OOC correction language to `위 분석을 참고하여 최종 RP 응답을 작성하세요.`
   - Existing saved pipeline-specific custom instructions remain unchanged.
   - No new RisuAI API was needed.
+- Translated runtime prompt scaffold text in `risu_agents.js` to English.
+  - Translated setting block headings/fallbacks, history role labels, agent prompt wrapper section headings, pre/post runtime output contracts, memory tag contracts, and main-model injection wrapper labels.
+  - Left user-editable/stored agent prompts unchanged, including `DEFAULT_AGENT_PRESETS`, `DEFAULT_OUTPUT_PRE`, `DEFAULT_OUTPUT_POST_*`, `defaultSystemPromptForMode()`, and the Row 5 default check instruction.
+  - Kept UI labels, buttons, toast text, Run Inspector text, and prompt-preview placeholder explanations in Korean.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -78,6 +83,12 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+- For runtime prompt scaffold translation:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+  - Static scan confirmed remaining Korean prompt strings are in intentionally excluded saved defaults, UI text, or prompt-preview placeholders.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -87,6 +98,7 @@ Commits:
 - `4254b29 Update Agent Platform labels`
 - `c25b221 Customize main model check instruction`
 - `25362c3 Simplify main model default instruction`
+- `d103559 Translate runtime prompt scaffold`
 
 Release status:
 - User previously said not to release yet.
