@@ -54,6 +54,10 @@ Recent completed changes:
   - Stored `attempts` and `retryErrors` in Run Inspector result details without changing note/prompt text.
   - Prevented pre-agent reuse when a previous pre-agent result has `status: failed`.
   - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
+- Updated the default Row 5 Main Model check instruction in `risu_agents.js`.
+  - Changed `위 분석을 참고하여 최종 RP 응답을 작성하세요.` to `위 분석을 반영하여 최종 RP 응답을 작성하세요.`
+  - Existing saved pipeline-specific custom instructions remain unchanged.
+  - No new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -103,6 +107,11 @@ Validation:
   - JavaScriptCore check passed with:
     `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
   - `node --check risu_agents.js` could not be run because `node` is not on PATH.
+- For Row 5 default check instruction wording:
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
@@ -114,6 +123,7 @@ Commits:
 - `25362c3 Simplify main model default instruction`
 - `d103559 Translate runtime prompt scaffold`
 - `c91209e Add agent API retry settings`
+- `91ac884 Update main model default check instruction`
 
 Release status:
 - User previously said not to release yet.
