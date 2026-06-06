@@ -23,6 +23,12 @@ Recent completed changes:
   - Future agents should update `HANDOFF.md` after committed concrete changes and commit that update separately.
   - Release workflow should use `HANDOFF.md` for release notes, then reset it in the version bump release commit.
   - Handoff maintenance commits do not need to list their own commit hash to avoid recursive handoff-only commits.
+- Updated Google provider naming in `risu_agents.js` from standalone `Vertex AI` labels to `Agent Platform (구 Vertex AI)`.
+  - Changed the provider dropdown label to `Agent Platform (구 Vertex AI)`.
+  - Changed the default Vertex provider preset name to `Agent Platform Gemini`.
+  - Updated the `agents_base_url` argument help text, credential toast, API/Base URL/access-token/WebCrypto error text, and debug log labels.
+  - Kept provider IDs, aliases, function/variable names, endpoint URLs, authentication flow, model defaults, and `//@version 1.1.11` unchanged.
+  - Checked `docs/risuai/types/risuai.d.ts` and `docs/risuai/plugins.md`; no new RisuAI API was needed.
 
 Files touched:
 - `risu_agents.js`
@@ -45,12 +51,19 @@ Validation:
 - For persistent `HANDOFF.md` workflow:
   - `git diff --check -- AGENTS.md` passed.
   - `git diff --check -- AGENTS.md HANDOFF.md` passed.
+- For Agent Platform label update:
+  - `rg -n "Vertex AI|Vertex Gemini|Vertex chat|Vertex token|Agent Platform" risu_agents.js` showed `Vertex AI` only in the intended `Agent Platform (구 Vertex AI)` compatibility label.
+  - `git diff --check -- risu_agents.js HANDOFF.md` passed.
+  - JavaScriptCore check passed with:
+    `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --ignoreUncaughtExceptions risu_agents.js`
+  - `node --check risu_agents.js` could not be run because `node` is not on PATH.
 
 Commits:
 - `13583a1 Clarify custom provider base URL help`
 - `4f456c1 Add handoff summary workflow`
 - `7abd1fd Fix post-agent prompt context assembly`
 - `2b80a80 Use persistent handoff summary file`
+- `4254b29 Update Agent Platform labels`
 
 Release status:
 - User previously said not to release yet.
