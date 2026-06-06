@@ -3867,6 +3867,21 @@
       };
     }
 
+    function startAgentTiming() {
+      return { startedAt: Date.now() };
+    }
+
+    function finishAgentTiming(timing) {
+      const startedAt = Number(timing?.startedAt);
+      const finishedAt = Date.now();
+      if (!Number.isFinite(startedAt) || startedAt <= 0) return {};
+      return {
+        startedAt,
+        finishedAt,
+        durationMs: Math.max(0, finishedAt - startedAt),
+      };
+    }
+
     function isRunLogEnabled(conf) {
       return conf?.runLogEnabled === true;
     }
@@ -4371,12 +4386,14 @@
         if (agents.length === 0) continue;
 
         const rowResults = await Promise.all(agents.map(async (agent) => {
+          const timing = startAgentTiming();
           const agentConf = resolveAgentConfig(agent, conf);
           if (!agentConf) {
             const content = '(스킵: 모델 프리셋 미설정)';
             console.log(`Agents! pre-agent skipped (${agent.name}): model preset not set`);
             return {
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               content,
               ...(keepRunDetails ? { rawOutput: content } : {}),
               status: 'skipped',
@@ -4390,6 +4407,7 @@
             console.log(`Agents! pre-agent skipped (${agent.name}): ${agentConf.provider} provider API key not set`);
             return {
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               content,
               ...(keepRunDetails ? { rawOutput: content } : {}),
               status: 'skipped',
@@ -4449,6 +4467,7 @@
                 }
                 return {
                   ...runAgentMeta(agent, conf),
+                  ...finishAgentTiming(timing),
                   ...retryLogFields,
                   content: parsed.note || content,
                   ...(keepRunDetails ? {
@@ -4468,6 +4487,7 @@
               if (conf.debugLog) console.log(`Agents! memory parse failed (${agent.name}); keeping previous memory`);
               return {
                 ...runAgentMeta(agent, conf),
+                ...finishAgentTiming(timing),
                 ...retryLogFields,
                 content,
                 ...(keepRunDetails ? {
@@ -4486,6 +4506,7 @@
             }
             return {
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               ...retryLogFields,
               content,
               ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
@@ -4498,6 +4519,7 @@
             console.log(`Agents! pre-agent failed (${agent.name}): ${err.message}`);
             return {
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               ...retryLogFields,
               content,
               ...(keepRunDetails ? { rawOutput: content, ...promptLogFields } : {}),
@@ -4586,12 +4608,14 @@
         const agent = getEnabledAgentsForRow(pipeline, row)[0];
         if (!agent) continue;
 
+        const timing = startAgentTiming();
         const agentConf = resolveAgentConfig(agent, conf);
         if (!agentConf) {
           console.log(`Agents! post-agent skipped (${agent.name}): model preset not set`);
           if (keepRunDetails) {
             postResults.push({
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               status: 'skipped',
               failed: true,
               inputResponse: currentResponse,
@@ -4606,6 +4630,7 @@
           if (keepRunDetails) {
             postResults.push({
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               status: 'skipped',
               failed: true,
               inputResponse: currentResponse,
@@ -4652,6 +4677,7 @@
             if (keepRunDetails) {
               postResults.push({
                 ...runAgentMeta(agent, conf),
+                ...finishAgentTiming(timing),
                 ...retryLogFields,
                 status: 'success',
                 inputResponse: currentResponse,
@@ -4667,6 +4693,7 @@
             if (keepRunDetails) {
               postResults.push({
                 ...runAgentMeta(agent, conf),
+                ...finishAgentTiming(timing),
                 ...retryLogFields,
                 status: 'empty',
                 inputResponse: currentResponse,
@@ -4682,6 +4709,7 @@
           if (keepRunDetails) {
             postResults.push({
               ...runAgentMeta(agent, conf),
+              ...finishAgentTiming(timing),
               ...retryLogFields,
               status: 'failed',
               failed: true,
@@ -5495,11 +5523,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const missing = preset ? '' : ' missing';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
         const status = result ? resultStatusLabel(result.status) : '결과 없음';
+        const duration = resultDurationLabel(result);
+        const durationMeta = duration ? ` · ${duration}` : '';
         const reused = result?.reused ? ' · 재사용됨' : '';
         const postMode = agent.mode === 'post' ? ` · ${postModeLabel(result?.postMode || agent.postMode)}` : '';
         return `<div class="agent-card${selected}${disabled}${missing} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(preset ? (preset.name || preset.model || 'model preset') : '모델 미설정')} · ${escHtml(status)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
+          <div class="agent-meta">${escHtml(preset ? (preset.name || preset.model || 'model preset') : '모델 미설정')} · ${escHtml(status)}${escHtml(durationMeta)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
         </div>`;
       }
 
@@ -5609,6 +5639,35 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return labels[status] || status || '성공';
     }
 
+    function resultDurationLabel(result) {
+      const durationMs = resultDurationMs(result);
+      return durationMs === null ? '' : formatInspectorDurationMs(durationMs);
+    }
+
+    function resultDurationMs(result) {
+      if (!result || result.reused) return null;
+      let durationMs = Number(result.durationMs);
+      if (!Number.isFinite(durationMs)) {
+        const startedAt = Number(result.startedAt);
+        const finishedAt = Number(result.finishedAt);
+        if (Number.isFinite(startedAt) && Number.isFinite(finishedAt)) {
+          durationMs = finishedAt - startedAt;
+        }
+      }
+      if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+      return Math.round(durationMs);
+    }
+
+    function formatInspectorDurationMs(durationMs) {
+      const ms = Math.max(0, Number(durationMs) || 0);
+      if (ms < 100) return '<0.1초';
+      if (ms < 60000) return `${(Math.round(ms / 100) / 10).toFixed(1)}초`;
+      const totalSeconds = Math.round(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}분 ${String(seconds).padStart(2, '0')}초`;
+    }
+
     function statusBadgeClass(status) {
       if (status === 'success' || status === 'updated' || status === 'format-recovered' || status === 'reused' || status === 'pre-reused') return 'ok';
       if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
@@ -5637,11 +5696,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const resultBadge = result
         ? `<span class="badge ${statusBadgeClass(result.status)}">${escHtml(resultStatusLabel(result.status))}</span>`
         : '<span class="badge neutral">최근 실행 결과 없음</span>';
+      const duration = resultDurationLabel(result);
       const meta = `<div class="detail-meta">
         <span class="badge neutral">Row ${escHtml(agent.row + 1)}</span>
         <span class="badge neutral">${escHtml(modeLabel)}</span>
         ${agent.mode === 'post' ? `<span class="badge neutral">${escHtml(postModeLabel(result?.postMode || agent.postMode))}</span>` : ''}
         ${resultBadge}
+        ${duration ? `<span class="badge neutral">소요 ${escHtml(duration)}</span>` : ''}
         ${result?.attempts ? `<span class="badge neutral">시도 ${escHtml(result.attempts)}회</span>` : ''}
         ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
