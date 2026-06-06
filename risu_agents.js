@@ -227,13 +227,17 @@
       const model   = String(preferArgumentValue(modelArg, vault.model || DEFAULT_AGENT_MODEL));
       const temperature = parseFloat(String(preferArgumentValue(temperatureArg, vault.temperature ?? '0.7')));
       const maxTokens = parseOptionalInt(preferArgumentValue(maxTokensArg, vault.maxTokens ?? ''));
-      const window  = Math.max(1, parseInt(preferArgumentValue(windowArg, vault.window || '10')) || 10);
+      const window  = Math.max(1, parseInt(resolveIntArgumentValue(windowArg, vault.window, 10), 10) || 10);
       const debugLog = parseBool(preferArgumentValue(debugLogArg, vault.debugLog ?? false), false);
       const runLogEnabled = parseBool(preferArgumentValue(runLogEnabledArg, vault.runLogEnabled ?? false), false);
       const bypassAuxRequests = parseBool(preferArgumentValue(bypassAuxRequestsArg, vault.bypassAuxRequests ?? true), true);
-      const apiTimeoutSeconds = normalizeApiTimeoutSeconds(preferArgumentValue(apiTimeoutSecondsArg, vault.apiTimeoutSeconds ?? DEFAULT_AGENT_API_TIMEOUT_SECONDS));
+      const apiTimeoutSeconds = normalizeApiTimeoutSeconds(
+        resolveIntArgumentValue(apiTimeoutSecondsArg, vault.apiTimeoutSeconds, DEFAULT_AGENT_API_TIMEOUT_SECONDS)
+      );
       const apiRetryEnabled = parseBool(preferArgumentValue(apiRetryEnabledArg, vault.apiRetryEnabled ?? false), false);
-      const apiRetryAttempts = normalizeApiRetryAttempts(preferArgumentValue(apiRetryAttemptsArg, vault.apiRetryAttempts ?? DEFAULT_AGENT_API_RETRY_ATTEMPTS));
+      const apiRetryAttempts = normalizeApiRetryAttempts(
+        resolveIntArgumentValue(apiRetryAttemptsArg, vault.apiRetryAttempts, DEFAULT_AGENT_API_RETRY_ATTEMPTS)
+      );
       const extraBodyJson = String(preferArgumentValue(extraBodyJsonArg, vault.extraBodyJson || '')).trim();
       const proxyUrl = normalizeProxyUrl(preferArgumentValue(proxyUrlArg, vault.proxyUrl || ''));
       const proxyKey = String(preferArgumentValue(proxyKeyArg, vault.proxyKey || '')).trim();
@@ -330,6 +334,18 @@
     function preferArgumentValue(argValue, fallbackValue) {
       if (argValue === undefined || argValue === null || String(argValue) === '') return fallbackValue;
       return argValue;
+    }
+
+    function resolveIntArgumentValue(argValue, vaultValue, defaultValue) {
+      const fallback = hasStoredConfigValue(vaultValue) ? vaultValue : defaultValue;
+      if (!hasStoredConfigValue(argValue)) return fallback;
+      const parsed = parseInt(String(argValue).trim(), 10);
+      if (!Number.isFinite(parsed)) return fallback;
+      return parsed === 0 ? fallback : parsed;
+    }
+
+    function hasStoredConfigValue(value) {
+      return value !== undefined && value !== null && String(value) !== '';
     }
 
     async function loadConfigVault(debugLog = false) {
