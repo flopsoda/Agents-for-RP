@@ -6711,7 +6711,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${postModeEditor}
           <div class="field"><label for="edit_systemPrompt">System Prompt</label><textarea id="edit_systemPrompt">${escHtml(agent.systemPrompt)}</textarea></div>
           <div class="field"><label for="edit_outputInstruction">Output Instruction</label><textarea id="edit_outputInstruction">${escHtml(agent.outputInstruction)}</textarea></div>
-          <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함</label>
+          <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함 (캐릭터/페르소나/작노/로어북)</label>
           <label class="checkline"><input id="edit_includeGlobalNoteReplacement" type="checkbox" ${agent.includeGlobalNoteReplacement ? 'checked' : ''}> 글로벌 노트 덮어쓰기 포함</label>
           <label class="checkline"><input id="edit_includeHistory" type="checkbox" ${agent.includeHistory ? 'checked' : ''}> 최근 대화 포함</label>
           <label class="checkline"><input id="edit_includeUserInput" type="checkbox" ${agent.includeUserInput ? 'checked' : ''}> 현재 유저 입력 포함</label>
