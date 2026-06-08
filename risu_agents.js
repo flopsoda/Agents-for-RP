@@ -2732,6 +2732,7 @@
     const MAIN_INJECTION_SYSTEM_TAIL = 'system-tail';
     const MAIN_INJECTION_USER_TAIL = 'user-tail';
     const MAIN_INJECTION_TARGETS = [MAIN_INJECTION_SYSTEM_TAIL, MAIN_INJECTION_USER_TAIL];
+    const DEFAULT_MAIN_INJECTION_TARGET = MAIN_INJECTION_USER_TAIL;
     const LEGACY_MAIN_MODEL_CHECK_INSTRUCTION =
       '위 분석을 반영하여 최종 RP 응답을 작성하세요.';
     const DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION =
@@ -2894,8 +2895,8 @@
     }
 
     function normalizeMainInjectionTarget(value) {
-      const target = String(value || MAIN_INJECTION_SYSTEM_TAIL).trim();
-      return MAIN_INJECTION_TARGETS.includes(target) ? target : MAIN_INJECTION_SYSTEM_TAIL;
+      const target = String(value || DEFAULT_MAIN_INJECTION_TARGET).trim();
+      return MAIN_INJECTION_TARGETS.includes(target) ? target : DEFAULT_MAIN_INJECTION_TARGET;
     }
 
     function cloneJson(value) {
