@@ -2732,8 +2732,10 @@
     const MAIN_INJECTION_SYSTEM_TAIL = 'system-tail';
     const MAIN_INJECTION_USER_TAIL = 'user-tail';
     const MAIN_INJECTION_TARGETS = [MAIN_INJECTION_SYSTEM_TAIL, MAIN_INJECTION_USER_TAIL];
-    const DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION =
+    const LEGACY_MAIN_MODEL_CHECK_INSTRUCTION =
       '위 분석을 반영하여 최종 RP 응답을 작성하세요.';
+    const DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION =
+      '위 분석 노트들을 반드시 반영하여 최종 RP 응답을 작성하세요.';
     const DEFAULT_OUTPUT_PRE =
       '간결한 불릿 포인트로 관찰과 제안만 정리하세요. 실제 RP 본문이나 최종 응답 문장은 작성하지 마세요.';
     const DEFAULT_OUTPUT_POST_POLISH =
@@ -2875,12 +2877,20 @@
     function normalizeMainModelConfig(raw) {
       const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
       const hasCheckInstruction = Object.prototype.hasOwnProperty.call(source, 'checkInstruction');
+      const checkInstruction = hasCheckInstruction
+        ? normalizeMainCheckInstruction(source.checkInstruction)
+        : DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION;
       return {
-        checkInstruction: hasCheckInstruction
-          ? String(source.checkInstruction ?? '')
-          : DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION,
+        checkInstruction,
         injectionTarget: normalizeMainInjectionTarget(source.injectionTarget),
       };
+    }
+
+    function normalizeMainCheckInstruction(value) {
+      const text = String(value ?? '');
+      return text === LEGACY_MAIN_MODEL_CHECK_INSTRUCTION
+        ? DEFAULT_MAIN_MODEL_CHECK_INSTRUCTION
+        : text;
     }
 
     function normalizeMainInjectionTarget(value) {
