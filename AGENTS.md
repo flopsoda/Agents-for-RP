@@ -47,7 +47,9 @@ This project targets RisuAI plugin development. Use the local reference files in
 - Use short, clear English commit messages that describe the change.
 - Do not commit if the user explicitly says not to commit.
 - On this machine, GitHub CLI may not be on PATH. Use the absolute path
-  `C:\Program Files\GitHub CLI\gh.exe` when running `gh` commands.
+  `C:\Program Files\GitHub CLI\gh.exe` when running `gh` commands only on Windows
+  worktrees where that path exists. On macOS/Linux worktrees, do not spend time
+  looking for that Windows path beyond a quick existence check.
 
 ## Release / Update Workflow
 
@@ -64,7 +66,18 @@ This project targets RisuAI plugin development. Use the local reference files in
     - If the release already exists, use `gh release edit <tag> --title <tag> --notes-file <file>`.
     - Write concise release notes from the commits since the previous plugin version, with user-facing sections such as `Added`, `Changed`, `Fixed`, and `Notes`.
     - Include any migration or setting-loss warning that users need before updating.
-  - If `gh` is unavailable or not authenticated, still push the commit and tag, then report the blocker and provide the exact release notes text for manual publishing.
+  - If `gh` is unavailable, do not stop after checking PATH. Try these release
+    publishing fallbacks in order:
+    1. On Windows, if `C:\Program Files\GitHub CLI\gh.exe` exists, use it.
+    2. On macOS, if `git config --get credential.helper` includes `osxkeychain`,
+       use `git credential fill` for `https://github.com` and call the GitHub
+       Releases REST API with `curl`/`jq` to create or update the release.
+       Never print the credential or token.
+    3. If a `GH_TOKEN` or `GITHUB_TOKEN` environment variable is set, use it with
+       the GitHub Releases REST API. Never print the token.
+  - If no authenticated release mechanism is available, still push the commit
+    and tag, then report the blocker and provide the exact release notes text
+    for manual publishing.
 - If the user says no, do not change `//@version` and do not push unless the user explicitly asks.
 
 ## Handoff Summary Workflow
