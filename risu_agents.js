@@ -5365,6 +5365,8 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .top-tabs button.ghost{color:#f1f1f1}
 .top-tabs button:hover{background:var(--surface-3)}
 .top-tabs button.primary:hover{background:var(--red-hover)}
+.main-injection-tabs{display:flex;width:100%}
+.main-injection-tabs button{flex:1;min-width:0;white-space:normal;line-height:1.25;text-align:center}
 .status-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .metric,.card,.test-result,.memory-snapshot,.preset-item,.agent-card,.pipeline-row{background:var(--surface);border:1px solid var(--line);border-radius:8px}
 .metric{padding:13px;min-height:72px}
@@ -6768,7 +6770,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         root.innerHTML = `<h2>Main Model Editor</h2>
           <div class="field">
             <label>Agents! 노트 주입 위치</label>
-            <div class="mini-actions">
+            <div class="top-tabs main-injection-tabs" role="tablist" aria-label="Agents note injection placement">
               ${mainInjectionTargetButtonHtml(MAIN_INJECTION_SYSTEM_TAIL, '마지막 System 뒤에 추가', pipelineState.mainModel.injectionTarget)}
               ${mainInjectionTargetButtonHtml(MAIN_INJECTION_USER_TAIL, '마지막 User 뒤에 추가', pipelineState.mainModel.injectionTarget)}
             </div>
@@ -6793,7 +6795,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function mainInjectionTargetButtonHtml(target, label, currentTarget) {
         const active = normalizeMainInjectionTarget(currentTarget) === target;
-        return `<button type="button" class="${active ? 'primary' : 'ghost'}" data-main-injection-target="${escHtml(target)}">${escHtml(label)}</button>`;
+        return `<button type="button" class="${active ? 'primary' : 'ghost'}" role="tab" aria-selected="${active ? 'true' : 'false'}" data-main-injection-target="${escHtml(target)}">${escHtml(label)}</button>`;
       }
 
       function bindEditorFields(agent) {
