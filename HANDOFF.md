@@ -1,5 +1,13 @@
 Pending unreleased changes since v1.1.16:
 
+- Add per-agent assistant prefill
+  - What changed: Pre- and post-agents now support an optional Assistant prefill toggle and textarea. Enabled non-empty prefills append a final `assistant` message to the agent API prompt, prompt previews render all message roles in order, run cards/Inspector show prefill state, and HTTP 400/403/422 prefill-format failures retry once without the prefill while logging the fallback.
+  - Files touched: `risu_agents.js`
+  - Checks run: `git diff --check` passed; Node-backed `vm.Script` parse of `risu_agents.js` passed; Node-backed sanity checks passed for pre/post prompt roles, empty prefill handling, legacy agent defaults, fallback status selection, prefill stripping, pre-agent reuse hash changes, and fallback wrapper retrying without the final assistant message.
+  - Checks not run: `node --check risu_agents.js` could not be run because `node` is not available on PATH in this shell; live RisuAI UI/API provider checks were not run.
+  - Commit: `bd5f954 Add per-agent assistant prefill`
+  - Release status: Version bump, tag, push, and GitHub Release intentionally skipped pending user confirmation.
+
 - Accept angle-bracket memory tags
   - What changed: Memory parsing now accepts both canonical `[AGENT_NOTE]` / `[MEMORY_UPDATE]` tags and XML-style `<AGENT_NOTE>` / `<MEMORY_UPDATE>` tags. Missing `AGENT_NOTE` close recovery also supports both tag styles.
   - Files touched: `risu_agents.js`
