@@ -3380,8 +3380,8 @@
 
     function parseTaggedBlock(text, tag) {
       const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const match = String(text || '').match(new RegExp(`\\[${escaped}\\]([\\s\\S]*?)\\[\\/${escaped}\\]`, 'i'));
-      return match ? match[1].trim() : null;
+      const match = String(text || '').match(new RegExp(`(?:\\[${escaped}\\]([\\s\\S]*?)\\[\\/${escaped}\\]|<${escaped}>([\\s\\S]*?)<\\/${escaped}>)`, 'i'));
+      return match ? (match[1] ?? match[2] ?? '').trim() : null;
     }
 
     function parseMemoryAgentOutput(text) {
@@ -3409,21 +3409,21 @@
 
     function recoverMissingMemoryNoteClose(text) {
       const source = String(text || '');
-      const noteOpen = findMemoryTagIndex(source, MEMORY_NOTE_TAG, false);
-      const noteClose = findMemoryTagIndex(source, MEMORY_NOTE_TAG, true);
-      const updateOpen = findMemoryTagIndex(source, MEMORY_UPDATE_TAG, false);
-      const updateClose = findMemoryTagIndex(source, MEMORY_UPDATE_TAG, true);
-      if (noteOpen < 0 || noteClose >= 0 || updateOpen < 0 || updateClose < 0 || updateOpen <= noteOpen) return null;
+      const noteOpen = findMemoryTagMatch(source, MEMORY_NOTE_TAG, false);
+      const noteClose = findMemoryTagMatch(source, MEMORY_NOTE_TAG, true);
+      const updateOpen = findMemoryTagMatch(source, MEMORY_UPDATE_TAG, false);
+      const updateClose = findMemoryTagMatch(source, MEMORY_UPDATE_TAG, true);
+      if (!noteOpen || noteClose || !updateOpen || !updateClose || updateOpen.index <= noteOpen.index) return null;
 
-      const noteStart = noteOpen + `[${MEMORY_NOTE_TAG}]`.length;
-      return source.slice(noteStart, updateOpen).trim();
+      const noteStart = noteOpen.index + noteOpen.length;
+      return source.slice(noteStart, updateOpen.index).trim();
     }
 
-    function findMemoryTagIndex(text, tag, closing = false) {
+    function findMemoryTagMatch(text, tag, closing = false) {
       const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pattern = closing ? `\\[\\/${escaped}\\]` : `\\[${escaped}\\]`;
+      const pattern = closing ? `(?:\\[\\/${escaped}\\]|<\\/${escaped}>)` : `(?:\\[${escaped}\\]|<${escaped}>)`;
       const match = String(text || '').match(new RegExp(pattern, 'i'));
-      return match ? match.index : -1;
+      return match ? { index: match.index, length: match[0].length } : null;
     }
 
     function hasMemoryEnabledPreAgents(pipeline) {
