@@ -87,6 +87,7 @@
     const AGENT_API_RETRY_BASE_DELAY_MS = 1500;
     const AGENT_API_RETRY_MAX_DELAY_MS = 6000;
     const AGENT_API_RETRY_AFTER_MAX_MS = 10000;
+    const ASSISTANT_PREFILL_FALLBACK_STATUSES = new Set([400, 403, 422]);
     const LEGACY_UI_IDS = ['risu-multiagent-lite-hamburger', 'risu-multiagent-lite-chat'];
     const MODEL_SEED_CATALOG = {
       ollama: [
@@ -487,6 +488,53 @@
       throw createAgentRequestError('Agent API retry loop ended unexpectedly');
     }
 
+    async function callAgentWithPrefillFallback(conf, messages, label = 'agent') {
+      try {
+        return await callAgentWithRetry(conf, messages);
+      } catch (err) {
+        if (!shouldRetryWithoutAssistantPrefill(messages, err)) throw err;
+
+        const fallbackMessages = withoutAssistantPrefillMessage(messages);
+        if (fallbackMessages === messages) throw err;
+
+        const fallbackError = agentRetryErrorEntry(err, Number(err?.attempts) || 1);
+        if (conf?.debugLog) {
+          console.log(`Agents! ${label}: assistant prefill failed; retrying without prefill: ${fallbackError.error}`);
+        }
+
+        try {
+          const result = await callAgentWithRetry(conf, fallbackMessages);
+          return {
+            ...result,
+            assistantPrefillFallback: true,
+            assistantPrefillFallbackError: fallbackError,
+          };
+        } catch (fallbackErr) {
+          fallbackErr.assistantPrefillFallback = true;
+          fallbackErr.assistantPrefillFallbackError = fallbackError;
+          throw fallbackErr;
+        }
+      }
+    }
+
+    function shouldRetryWithoutAssistantPrefill(messages, err) {
+      if (!hasAssistantPrefillMessage(messages)) return false;
+      const status = Number(err?.status);
+      return ASSISTANT_PREFILL_FALLBACK_STATUSES.has(status);
+    }
+
+    function hasAssistantPrefillMessage(messages) {
+      const list = Array.isArray(messages) ? messages : [];
+      const last = list[list.length - 1];
+      return last?.role === 'assistant' && String(last?.content || '').trim() !== '';
+    }
+
+    function withoutAssistantPrefillMessage(messages) {
+      const list = Array.isArray(messages) ? messages : [];
+      if (!hasAssistantPrefillMessage(list)) return messages;
+      return list.slice(0, -1);
+    }
+
     function shouldRetryAgentError(err) {
       return err?.retryable === true;
     }
@@ -519,7 +567,14 @@
       const retryErrors = Array.isArray(source?.retryErrors)
         ? source.retryErrors.map(item => ({ ...item }))
         : [];
-      return { attempts, retryErrors };
+      const fields = { attempts, retryErrors };
+      if (source?.assistantPrefillFallback) {
+        fields.assistantPrefillFallback = true;
+        if (source.assistantPrefillFallbackError) {
+          fields.assistantPrefillFallbackError = { ...source.assistantPrefillFallbackError };
+        }
+      }
+      return fields;
     }
 
     function createAgentRequestError(message, meta = {}) {
@@ -3141,6 +3196,8 @@
         includeUserInput: agent?.includeUserInput !== false,
         includePreviousNotes: agent?.includePreviousNotes !== false,
         includeGlobalNoteReplacement: agent?.includeGlobalNoteReplacement === true,
+        assistantPrefillEnabled: agent?.assistantPrefillEnabled === true,
+        assistantPrefill: String(agent?.assistantPrefill || ''),
         memoryEnabled: mode === 'pre' && agent?.memoryEnabled === true,
         memoryInstruction: String(agent?.memoryInstruction || ''),
         memoryFormat: String(agent?.memoryFormat || ''),
@@ -3320,10 +3377,21 @@
         agent.mode === 'pre' && agent.memoryEnabled ? `\n${memoryOutputContract(agent)}` : '',
       ].join('\n');
 
-      return [
+      const messages = [
         { role: 'system', content: systemContent },
         { role: 'user', content: sections.join('\n\n') },
       ];
+      const assistantPrefill = effectiveAssistantPrefill(agent);
+      if (assistantPrefill) {
+        messages.push({ role: 'assistant', content: assistantPrefill });
+      }
+      return messages;
+    }
+
+    function effectiveAssistantPrefill(agent) {
+      if (agent?.assistantPrefillEnabled !== true) return '';
+      const content = String(agent?.assistantPrefill || '');
+      return content.trim() ? content : '';
     }
 
     function postModeOutputContract(postMode) {
@@ -3962,6 +4030,7 @@
         modelPresetName: preset?.name || '',
         model: preset?.model || '',
         provider: preset?.provider || '',
+        assistantPrefillEnabled: agent.assistantPrefillEnabled === true,
         memoryEnabled: agent.mode === 'pre' && agent.memoryEnabled === true,
         memoryInstruction: agent.mode === 'pre' ? agent.memoryInstruction || '' : '',
         memoryFormat: agent.mode === 'pre' ? agent.memoryFormat || '' : '',
@@ -4162,6 +4231,8 @@
             .update(Boolean(agent.includeUserInput))
             .update(Boolean(agent.includePreviousNotes))
             .update(Boolean(agent.includeGlobalNoteReplacement))
+            .update(Boolean(agent.assistantPrefillEnabled))
+            .update(agent.assistantPrefill || '')
             .update(Boolean(agent.mode === 'pre' && agent.memoryEnabled))
             .update(agent.memoryInstruction || '')
             .update(agent.memoryFormat || '')
@@ -4549,7 +4620,7 @@
           if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} prompt`, prompt, true);
 
           try {
-            const agentCall = await callAgentWithRetry(agentConf, prompt);
+            const agentCall = await callAgentWithPrefillFallback(agentConf, prompt, `Row ${row + 1} ${agent.name}`);
             const content = agentCall.content;
             const retryLogFields = agentRetryResultFields(agentCall);
             if (conf.debugLog) logTextBlock(`Agents! debug: Row ${row + 1} ${agent.name} result`, content);
@@ -4773,7 +4844,7 @@
         if (conf.debugLog) logPromptFlow(`Agents! debug: Row ${row + 1} ${agent.name} post-agent prompt`, prompt, true);
 
         try {
-          const agentCall = await callAgentWithRetry(agentConf, prompt);
+          const agentCall = await callAgentWithPrefillFallback(agentConf, prompt, `Row ${row + 1} ${agent.name} post-agent`);
           const retryLogFields = agentRetryResultFields(agentCall);
           const rawOutput = String(agentCall.content || '').trim();
           if (rawOutput) {
@@ -5652,6 +5723,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const preset = findModelPreset(conf.modelPresets, agent.modelPresetId);
         const missing = preset ? '' : ' missing';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
+        const prefill = effectiveAssistantPrefill(agent) ? ' · 프리필' : '';
         const status = result ? resultStatusLabel(result.status) : '결과 없음';
         const duration = resultDurationLabel(result);
         const durationMeta = duration ? ` · ${duration}` : '';
@@ -5659,7 +5731,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const postMode = agent.mode === 'post' ? ` · ${postModeLabel(result?.postMode || agent.postMode)}` : '';
         return `<div class="agent-card${selected}${disabled}${missing} ${escHtml(statusClass)}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(preset ? (preset.name || preset.model || 'model preset') : '모델 미설정')} · ${escHtml(status)}${escHtml(durationMeta)}${escHtml(memory)}${escHtml(postMode)}${escHtml(reused)}</div>
+          <div class="agent-meta">${escHtml(preset ? (preset.name || preset.model || 'model preset') : '모델 미설정')} · ${escHtml(status)}${escHtml(durationMeta)}${escHtml(memory)}${escHtml(prefill)}${escHtml(postMode)}${escHtml(reused)}</div>
         </div>`;
       }
 
@@ -5835,6 +5907,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${duration ? `<span class="badge neutral">소요 ${escHtml(duration)}</span>` : ''}
         ${result?.attempts ? `<span class="badge neutral">시도 ${escHtml(result.attempts)}회</span>` : ''}
         ${result?.reused ? '<span class="badge ok">재사용됨</span>' : ''}
+        ${result?.assistantPrefillFallback ? '<span class="badge neutral">프리필 없이 재시도</span>' : ''}
         ${result?.memoryStatus && result.memoryStatus !== 'disabled' ? `<span class="badge ${statusBadgeClass(result.memoryStatus)}">기억: ${escHtml(memoryStatusLabel(result.memoryStatus))}</span>` : ''}
         ${Array.isArray(result?.cbsWarnings) && result.cbsWarnings.length ? `<span class="badge neutral">CBS 경고 ${escHtml(result.cbsWarnings.length)}</span>` : ''}
       </div>`;
@@ -5850,6 +5923,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${runLogDetailBlockHtml('적용 후 응답', result, 'outputResponse', '(적용 후 응답 없음)')}
           ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
           ${runLogDetailBlockHtml('에이전트 출력', result, 'rawOutput', '(에이전트 출력 없음)')}
+          ${result.assistantPrefillFallback ? detailBlockHtml('Assistant prefill fallback', formatAssistantPrefillFallbackForDisplay(result)) : ''}
           ${Array.isArray(result.retryErrors) && result.retryErrors.length ? detailBlockHtml('재시도 내역', formatRetryErrorsForDisplay(result.retryErrors)) : ''}
           ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
           ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
@@ -5864,9 +5938,17 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         ${memoryUpdateBlock}
         ${runLogDetailBlockHtml('에이전트 프롬프트', result, 'prompt', '(프롬프트 없음)')}
         ${runLogDetailBlockHtml('Raw Output', result, 'rawOutput', '(원본 출력 없음)', { fallbackField: 'content' })}
+        ${result.assistantPrefillFallback ? detailBlockHtml('Assistant prefill fallback', formatAssistantPrefillFallbackForDisplay(result)) : ''}
         ${Array.isArray(result.retryErrors) && result.retryErrors.length ? detailBlockHtml('재시도 내역', formatRetryErrorsForDisplay(result.retryErrors)) : ''}
         ${Array.isArray(result.cbsWarnings) && result.cbsWarnings.length ? detailBlockHtml('CBS 경고', result.cbsWarnings.join('\n')) : ''}
         ${result.error ? detailBlockHtml('오류', result.error) : ''}`;
+    }
+
+    function formatAssistantPrefillFallbackForDisplay(result) {
+      const err = result?.assistantPrefillFallbackError || {};
+      const status = Number.isFinite(Number(err.status)) ? `HTTP ${Number(err.status)} · ` : '';
+      const message = String(err.error || 'unknown error');
+      return `Assistant prefill 포함 요청이 실패해 prefill 없이 한 번 재시도했습니다.\n원래 오류: ${status}${message}`;
     }
 
     function formatRetryErrorsForDisplay(retryErrors) {
@@ -6734,10 +6816,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const model = preset ? (preset.name || preset.model || 'model preset') : '모델 미설정';
         const context = preset?.contextWindow || '-';
         const memory = agent.mode === 'pre' && agent.memoryEnabled ? ' · 기억' : '';
+        const prefill = effectiveAssistantPrefill(agent) ? ' · 프리필' : '';
         const postMode = agent.mode === 'post' ? ` · ${postModeLabel(agent.postMode)}` : '';
         return `<div class="agent-card${selected}${disabled}${missing}" data-agent-id="${escHtml(agent.id)}">
           <div class="agent-name">${escHtml(agent.name)}</div>
-          <div class="agent-meta">${escHtml(model)} · ${escHtml(context)}${escHtml(memory)}${escHtml(postMode)}</div>
+          <div class="agent-meta">${escHtml(model)} · ${escHtml(context)}${escHtml(memory)}${escHtml(prefill)}${escHtml(postMode)}</div>
         </div>`;
       }
 
@@ -6768,6 +6851,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
                <div class="field"><label for="edit_memoryFormat">기억 포맷</label><textarea id="edit_memoryFormat" placeholder="예: 핵심 항목을 짧은 목록으로 정리하세요. 예: 인물 - 내용 / 장소 - 내용">${escHtml(agent.memoryFormat)}</textarea></div>
              </div>` : ''}`
           : '';
+        const assistantPrefillEditor = `<label class="checkline"><input id="edit_assistantPrefillEnabled" type="checkbox" ${agent.assistantPrefillEnabled ? 'checked' : ''}> Assistant prefill 활성화</label>
+          ${agent.assistantPrefillEnabled ? `<div class="memory-settings">
+            <div class="field"><label for="edit_assistantPrefill">Assistant prefill</label><textarea id="edit_assistantPrefill" placeholder="예: 알겠습니다. 이어서 분석하겠습니다:">${escHtml(agent.assistantPrefill)}</textarea></div>
+          </div>` : ''}`;
         const postModeEditor = agent.mode === 'post'
           ? `<div class="field"><label for="edit_postMode">후처리 방식</label>${postModeSelect('edit_postMode', agent.postMode)}</div>`
           : '';
@@ -6779,6 +6866,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ${postModeEditor}
           <div class="field"><label for="edit_systemPrompt">System Prompt</label><textarea id="edit_systemPrompt">${escHtml(agent.systemPrompt)}</textarea></div>
           <div class="field"><label for="edit_outputInstruction">Output Instruction</label><textarea id="edit_outputInstruction">${escHtml(agent.outputInstruction)}</textarea></div>
+          ${assistantPrefillEditor}
           <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함 (캐릭터/페르소나/작노/로어북)</label>
           <label class="checkline"><input id="edit_includeGlobalNoteReplacement" type="checkbox" ${agent.includeGlobalNoteReplacement ? 'checked' : ''}> 글로벌 노트 덮어쓰기 포함</label>
           <label class="checkline"><input id="edit_includeHistory" type="checkbox" ${agent.includeHistory ? 'checked' : ''}> 최근 대화 포함</label>
@@ -6832,11 +6920,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
 
       function bindEditorFields(agent) {
-        const textFields = ['name', 'systemPrompt', 'outputInstruction', 'memoryInstruction', 'memoryFormat'];
+        const textFields = ['name', 'systemPrompt', 'outputInstruction', 'assistantPrefill', 'memoryInstruction', 'memoryFormat'];
         textFields.forEach((field) => {
           document.getElementById(`edit_${field}`)?.addEventListener('input', (event) => {
             agent[field] = event.target.value;
-            if (field === 'name') renderPipeline();
+            if (field === 'name' || field === 'assistantPrefill') renderPipeline();
           });
         });
 
@@ -6860,6 +6948,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             agent[field] = event.target.checked;
             renderPipeline();
           });
+        });
+
+        document.getElementById('edit_assistantPrefillEnabled')?.addEventListener('change', (event) => {
+          agent.assistantPrefillEnabled = event.target.checked;
+          if (!agent.assistantPrefill) agent.assistantPrefill = '';
+          renderPipeline();
+          renderAgentEditor();
         });
 
         document.getElementById('edit_memoryEnabled')?.addEventListener('change', (event) => {
@@ -6929,10 +7024,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function promptPreviewModalHtml(agent, promptMessages) {
         const preset = findModelPreset(modelPresetsState, agent.modelPresetId);
-        const systemMessage = promptMessages.find(message => message.role === 'system')?.content || '';
-        const userMessage = promptMessages.find(message => message.role === 'user')?.content || '';
         const modeLabel = agent.mode === 'post' ? 'Post-Agent' : 'Pre-Agent';
         const postModeText = agent.mode === 'post' ? ` · ${postModeLabel(agent.postMode)}` : '';
+        const blocks = (Array.isArray(promptMessages) ? promptMessages : []).map((message, idx) => `
+            <div class="prompt-preview-block">
+              <h3>${escHtml(idx + 1)}. ${escHtml(message?.role || '(none)')}</h3>
+              <pre>${escHtml(message?.content ?? '')}</pre>
+            </div>`).join('');
         return `<div id="prompt-preview-backdrop" class="modal-backdrop">
           <div class="prompt-modal" role="dialog" aria-modal="true" aria-label="프롬프트 확인">
             <div class="prompt-modal-head">
@@ -6942,14 +7040,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
               </div>
               <button id="prompt-preview-close" class="ghost">닫기</button>
             </div>
-            <div class="prompt-preview-block">
-              <h3>system</h3>
-              <pre>${escHtml(systemMessage)}</pre>
-            </div>
-            <div class="prompt-preview-block">
-              <h3>user</h3>
-              <pre>${escHtml(userMessage)}</pre>
-            </div>
+            ${blocks || '<div class="empty">프롬프트 메시지가 없습니다.</div>'}
           </div>
         </div>`;
       }
