@@ -1137,6 +1137,8 @@
         dbAvailable = sources.dbAvailable;
       }
 
+      const currentChat = currentChatContext?.chat || getCurrentCharacterChat(character);
+
       if (character) {
         const charDesc = firstNonEmpty(character.description, character.desc);
         if (charDesc) {
@@ -1144,12 +1146,11 @@
           stats.character = 'found';
         }
 
-        const chat = currentChatContext?.chat || getCurrentCharacterChat(character);
-        const chatSource = currentChatContext?.chat === chat
+        const chatSource = currentChatContext?.chat === currentChat
           ? currentChatContext.source
-          : chat ? 'fallback' : 'missing';
+          : currentChat ? 'fallback' : 'missing';
         stats.chatLoreSource = chatSource;
-        const note = String(chat?.note || '').trim();
+        const note = String(currentChat?.note || '').trim();
         if (note) {
           parts.authorNote = note;
           stats.authorNote = 'found';
@@ -1158,7 +1159,9 @@
       }
 
       if (dbAvailable && db) {
-        const persona = getSelectedPersona(db);
+        const personaResult = resolveUserDescriptionPersona(db, currentChat);
+        const persona = personaResult.persona;
+        if (personaResult.source) stats.personaSource = personaResult.source;
         if (persona) {
           const personaPrompt = String(persona.personaPrompt || '').trim();
 
@@ -1340,7 +1343,7 @@
       const bindedPersona = String(chat?.bindedPersona || '').trim();
       const personas = Array.isArray(db?.personas) ? db.personas : [];
       if (bindedPersona && personas.length) {
-        const persona = personas.find(item => item?.id === bindedPersona || item?.name === bindedPersona);
+        const persona = findPersonaByReference(personas, bindedPersona);
         const personaName = String(persona?.name || '').trim();
         if (personaName) {
           context.userName = personaName;
@@ -1406,7 +1409,7 @@
       const personas = Array.isArray(db?.personas) ? db.personas : [];
       const bindedPersona = String(chat?.bindedPersona || '').trim();
       if (bindedPersona && personas.length) {
-        const persona = personas.find(item => item?.id === bindedPersona || item?.name === bindedPersona);
+        const persona = findPersonaByReference(personas, bindedPersona);
         const personaName = String(persona?.name || '').trim();
         if (personaName) return { name: personaName, source: 'chat.bindedPersona' };
       }
@@ -2357,6 +2360,25 @@
       }
 
       return personas[0];
+    }
+
+    function findPersonaByReference(personas, reference) {
+      const target = String(reference || '').trim();
+      if (!target || !Array.isArray(personas)) return null;
+      return personas.find(persona => persona?.id === target || persona?.name === target) || null;
+    }
+
+    function resolveUserDescriptionPersona(db, chat) {
+      const personas = Array.isArray(db?.personas) ? db.personas : [];
+      const bindedPersona = String(chat?.bindedPersona || '').trim();
+      if (bindedPersona && personas.length) {
+        const persona = findPersonaByReference(personas, bindedPersona);
+        if (persona) return { persona, source: 'chat.bindedPersona' };
+      }
+
+      const selectedPersona = getSelectedPersona(db);
+      if (selectedPersona) return { persona: selectedPersona, source: 'selectedPersona' };
+      return { persona: null, source: bindedPersona ? 'persona-not-found' : 'missing' };
     }
 
     function collectLorebookCandidates(character, db, currentChatContext = null) {
@@ -7933,6 +7955,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       else console.log('Agents! debug: setting block stats');
       console.log(`character: ${stats.character}`);
       console.log(`persona: ${stats.persona}`);
+      if (stats.personaSource) console.log(`personaSource: ${stats.personaSource}`);
       console.log(`authorNote: ${stats.authorNote}`);
       if (stats.authorNoteSource) console.log(`authorNoteSource: ${stats.authorNoteSource}`);
       if (stats.chatLoreSource) console.log(`chatLoreSource: ${stats.chatLoreSource}`);
