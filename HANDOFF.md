@@ -7,3 +7,11 @@ Pending unreleased changes since v1.1.16:
   - Checks not run: `node --check risu_agents.js` could not be run because `node` is not available on PATH in this shell.
   - Commit: `47de84b Accept angle-bracket memory tags`
   - Release status: Version bump, tag, push, and GitHub Release intentionally skipped pending user confirmation.
+
+- Prefer bound persona descriptions
+  - What changed: Setting blocks now resolve `[User Description]` from the current chat's bound persona before falling back to the selected/default persona. Persona lookup by `id` or `name` is shared with existing `{{user}}` and CBS user-name paths, and debug logs now include the persona source.
+  - Files touched: `risu_agents.js`
+  - Checks run: Node-backed REPL helper checks passed for bound persona by id, bound persona by name, no binding fallback, missing binding fallback, and null database fallback; Node-backed `vm.Script` parse of `risu_agents.js` passed.
+  - Checks not run: `node --check risu_agents.js` could not be run because `node` is not available on PATH in this shell.
+  - Commit: `da34c49 Prefer bound persona descriptions`
+  - Release status: Version bump, tag, push, and GitHub Release intentionally skipped pending user confirmation.
