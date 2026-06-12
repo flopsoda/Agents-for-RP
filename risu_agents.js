@@ -37,6 +37,7 @@
 
 (async () => {
   try {
+    const PLUGIN_VERSION = '1.1.18';
     let vertexTokenCache = null;
     const DEFAULT_AGENT_PROVIDER = 'openai';
     const DEFAULT_AGENT_BASE_URL = 'https://api.openai.com/v1';
@@ -5491,6 +5492,7 @@ body{font-family:Roboto,Arial,system-ui,-apple-system,BlinkMacSystemFont,"Segoe 
 .top>div:first-child{min-width:0}
 h1{font-size:1.22rem;font-weight:800;letter-spacing:0;margin-bottom:2px;display:flex;align-items:center;gap:10px}
 h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--red);box-shadow:0 0 0 1px rgba(255,255,255,.06) inset,13px 6px 0 -4px #fff;display:inline-block;flex:0 0 auto}
+.version-badge{display:inline-flex;align-items:center;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface-2);color:var(--muted);font-size:.72rem;font-weight:700;padding:2px 8px;line-height:1.3}
 .subtitle{color:var(--muted);font-size:.82rem;max-width:720px}
 .header-actions{display:flex;justify-content:flex-end}
 .top-tabs{display:inline-flex;align-items:center;border:1px solid var(--line-strong);border-radius:9px;background:var(--surface-2);overflow:hidden}
@@ -6232,7 +6234,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>Agents!</h1>
+      <h1>Agents! <span class="version-badge">v${escHtml(PLUGIN_VERSION)}</span></h1>
       <p class="subtitle">Row 1-4는 메인 모델 전 노트 생성, Row 5는 Main Model, Row 6-9는 응답 후처리입니다.</p>
     </div>
     <div class="header-actions">
@@ -8262,7 +8264,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       }
     });
 
-    console.log('Agents! v1.1.11 loaded');
+    console.log(`Agents! v${PLUGIN_VERSION} loaded`);
 
   } catch (err) {
     console.log(`Agents! init error: ${err.message}`);
