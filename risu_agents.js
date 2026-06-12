@@ -3470,8 +3470,8 @@
 
     function parseTaggedBlock(text, tag) {
       const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const match = String(text || '').match(new RegExp(`(?:\\[${escaped}\\]([\\s\\S]*?)\\[\\/${escaped}\\]|<${escaped}>([\\s\\S]*?)<\\/${escaped}>)`, 'i'));
-      return match ? (match[1] ?? match[2] ?? '').trim() : null;
+      const match = String(text || '').match(new RegExp(`(?:\\[${escaped}\\]|<${escaped}>)([\\s\\S]*?)(?:\\[\\/${escaped}\\]|<\\/${escaped}>)`, 'i'));
+      return match ? (match[1] ?? '').trim() : null;
     }
 
     function parseMemoryAgentOutput(text) {
