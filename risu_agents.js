@@ -3429,19 +3429,19 @@
         'MEMORY_UPDATE is for storage only and must contain the full latest memory state to keep for the next turn.',
         'Do not mix AGENT_NOTE auxiliary analysis or the final RP response into MEMORY_UPDATE.',
         '',
-        `[${MEMORY_NOTE_TAG}]`,
+        `<${MEMORY_NOTE_TAG}>`,
         'Auxiliary note to pass to the next agent or the main model',
-        `[/${MEMORY_NOTE_TAG}]`,
+        `</${MEMORY_NOTE_TAG}>`,
         '',
-        `[${MEMORY_UPDATE_TAG}]`,
+        `<${MEMORY_UPDATE_TAG}>`,
         'Full latest memory state to keep for the next turn. Do not write only the delta.',
-        `[/${MEMORY_UPDATE_TAG}]`,
+        `</${MEMORY_UPDATE_TAG}>`,
       ];
 
       if (agent?.memoryFormat) {
         lines.push(
           '',
-          'Important: MEMORY_UPDATE must follow only the format specified in [Memory Format].',
+          'Important: MEMORY_UPDATE must follow only the format specified in <Memory Format>.',
           'Do not add explanations, summaries, background information, Markdown, bullet points, or headings.',
         );
       }
@@ -3452,66 +3452,42 @@
     function memoryFinalOutputReminder() {
       return [
         'Final output format check:',
-        `You must include all four tags: [${MEMORY_NOTE_TAG}], [/${MEMORY_NOTE_TAG}], [${MEMORY_UPDATE_TAG}], and [/${MEMORY_UPDATE_TAG}].`,
+        `You must include all four tags: <${MEMORY_NOTE_TAG}>, </${MEMORY_NOTE_TAG}>, <${MEMORY_UPDATE_TAG}>, and </${MEMORY_UPDATE_TAG}>.`,
         'Do not write any text outside the tags.',
-        `After opening [${MEMORY_NOTE_TAG}], you must close it with [/${MEMORY_NOTE_TAG}] before starting [${MEMORY_UPDATE_TAG}].`,
+        `After opening <${MEMORY_NOTE_TAG}>, you must close it with </${MEMORY_NOTE_TAG}> before starting <${MEMORY_UPDATE_TAG}>.`,
         '',
-        `[${MEMORY_NOTE_TAG}]`,
+        `<${MEMORY_NOTE_TAG}>`,
         'Auxiliary note to pass to the next agent or the main model',
-        `[/${MEMORY_NOTE_TAG}]`,
+        `</${MEMORY_NOTE_TAG}>`,
         '',
-        `[${MEMORY_UPDATE_TAG}]`,
+        `<${MEMORY_UPDATE_TAG}>`,
         'Full latest memory state to keep for the next turn',
-        `[/${MEMORY_UPDATE_TAG}]`,
+        `</${MEMORY_UPDATE_TAG}>`,
       ].join('\n');
     }
 
+    function escapeRegExp(value) {
+      return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
     function parseTaggedBlock(text, tag) {
-      const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const match = String(text || '').match(new RegExp(`(?:\\[${escaped}\\]|<${escaped}>)([\\s\\S]*?)(?:\\[\\/${escaped}\\]|<\\/${escaped}>)`, 'i'));
+      const escaped = escapeRegExp(tag);
+      const match = String(text || '').match(new RegExp(`<${escaped}>([\\s\\S]*?)<\\/${escaped}>`));
       return match ? (match[1] ?? '').trim() : null;
     }
 
     function parseMemoryAgentOutput(text) {
       const source = String(text || '');
-      const note = parseTaggedBlock(text, MEMORY_NOTE_TAG);
-      const memoryUpdate = parseTaggedBlock(text, MEMORY_UPDATE_TAG);
-      if (note === null && memoryUpdate !== null) {
-        const recoveredNote = recoverMissingMemoryNoteClose(source);
-        if (recoveredNote !== null) {
-          return {
-            ok: true,
-            recovered: true,
-            note: recoveredNote,
-            memoryUpdate: memoryUpdate || '',
-          };
-        }
-      }
+      const noteTag = escapeRegExp(MEMORY_NOTE_TAG);
+      const updateTag = escapeRegExp(MEMORY_UPDATE_TAG);
+      const match = source.match(new RegExp(`^\\s*<${noteTag}>([\\s\\S]*?)<\\/${noteTag}>\\s*<${updateTag}>([\\s\\S]*?)<\\/${updateTag}>\\s*$`));
+      const note = match ? parseTaggedBlock(source, MEMORY_NOTE_TAG) : null;
+      const memoryUpdate = match ? parseTaggedBlock(source, MEMORY_UPDATE_TAG) : null;
       return {
-        ok: note !== null && memoryUpdate !== null,
-        recovered: false,
-        note: note || '',
-        memoryUpdate: memoryUpdate || '',
+        ok: Boolean(match),
+        note: note ?? '',
+        memoryUpdate: memoryUpdate ?? '',
       };
-    }
-
-    function recoverMissingMemoryNoteClose(text) {
-      const source = String(text || '');
-      const noteOpen = findMemoryTagMatch(source, MEMORY_NOTE_TAG, false);
-      const noteClose = findMemoryTagMatch(source, MEMORY_NOTE_TAG, true);
-      const updateOpen = findMemoryTagMatch(source, MEMORY_UPDATE_TAG, false);
-      const updateClose = findMemoryTagMatch(source, MEMORY_UPDATE_TAG, true);
-      if (!noteOpen || noteClose || !updateOpen || !updateClose || updateOpen.index <= noteOpen.index) return null;
-
-      const noteStart = noteOpen.index + noteOpen.length;
-      return source.slice(noteStart, updateOpen.index).trim();
-    }
-
-    function findMemoryTagMatch(text, tag, closing = false) {
-      const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pattern = closing ? `(?:\\[\\/${escaped}\\]|<\\/${escaped}>)` : `(?:\\[${escaped}\\]|<${escaped}>)`;
-      const match = String(text || '').match(new RegExp(pattern, 'i'));
-      return match ? { index: match.index, length: match[0].length } : null;
     }
 
     function hasMemoryEnabledPreAgents(pipeline) {
@@ -4634,7 +4610,7 @@
                     memoryStatus = 'chat-context-unavailable';
                   } else {
                     saved = await saveAgentMemory(agent, agentMemory, parsed.memoryUpdate, conf.debugLog);
-                    memoryStatus = saved ? (parsed.recovered ? 'format-recovered' : 'updated') : 'storage-failed';
+                    memoryStatus = saved ? 'updated' : 'storage-failed';
                   }
                 }
                 return {
@@ -4967,11 +4943,7 @@
 
     function buildAgentNotesInjection(orderedNotes, mainModelConfig = null, options = {}) {
       const checkInstruction = String(normalizeMainModelConfig(mainModelConfig).checkInstruction || '').trim();
-      const injectionParts = [
-        '---',
-        '[Agents! Analysis Context]',
-        '',
-      ];
+      const injectionParts = [];
       if (options.userTail === true) {
         injectionParts.push(
           'The following context was generated by Agents! helper agents. It is not part of the user\'s in-character message. Use it only as private guidance for the final response, and do not quote or reveal this block.',
@@ -4985,8 +4957,7 @@
       if (checkInstruction) {
         injectionParts.push('[Check Instruction]', checkInstruction, '');
       }
-      injectionParts.push('---');
-      return injectionParts.join('\n');
+      return formatPromptSection('Agents! Analysis Context', injectionParts.join('\n').trim());
     }
 
     function appendAgentNotesToMessage(messages, targetIndex, content) {
@@ -5901,7 +5872,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     }
 
     function statusBadgeClass(status) {
-      if (status === 'success' || status === 'updated' || status === 'format-recovered' || status === 'reused' || status === 'pre-reused') return 'ok';
+      if (status === 'success' || status === 'updated' || status === 'reused' || status === 'pre-reused') return 'ok';
       if (status === 'failed' || status === 'skipped' || status === 'parse-failed' || status === 'storage-failed' || status === 'chat-context-unavailable' || status === 'chat-scope-unavailable') return 'err';
       return 'neutral';
     }
@@ -5910,7 +5881,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const labels = {
         disabled: '비활성',
         updated: '갱신됨',
-        'format-recovered': '포맷 복구됨',
         'empty-update': '빈 갱신',
         'parse-failed': '파싱 실패',
         'storage-failed': '저장 실패',
