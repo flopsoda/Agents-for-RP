@@ -78,6 +78,10 @@ This project targets RisuAI plugin development. Use the local reference files in
   - If no authenticated release mechanism is available, still push the commit
     and tag, then report the blocker and provide the exact release notes text
     for manual publishing.
+  - In the final response after a release, include a very short, plain-language
+    community announcement blurb that summarizes the update and encourages users
+    to update when the change is important. Keep it easy to copy into a community
+    post.
 - If the user says no, do not change `//@version` and do not push unless the user explicitly asks.
 
 ## Handoff Summary Workflow
