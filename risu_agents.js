@@ -2771,6 +2771,10 @@
         .filter(Boolean);
     }
 
+    function formatPromptSection(name, content) {
+      return [`<${name}>`, content ?? '', `</${name}>`].join('\n');
+    }
+
     function formatSettingBlocks(parts) {
       const loreText = parts.activeLorebooks.length
         ? parts.activeLorebooks
@@ -2779,18 +2783,11 @@
         : '(No active lorebook matches)';
 
       return [
-        '[Character Description]',
-        parts.characterDescription,
-        '',
-        '[User Description]',
-        parts.userDescription,
-        '',
-        '[Author\'s Note]',
-        parts.authorNote,
-        '',
-        '[Active Lorebooks]',
-        loreText,
-      ].join('\n');
+        formatPromptSection('Character Description', parts.characterDescription),
+        formatPromptSection('User Description', parts.userDescription),
+        formatPromptSection('Author\'s Note', parts.authorNote),
+        formatPromptSection('Active Lorebooks', loreText),
+      ].join('\n\n');
     }
 
     function findLastIndex(arr, predicate) {
@@ -3343,31 +3340,31 @@
         }));
       }
       if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
-        sections.push(`[Global Note Replacement]\n${context.globalNoteReplacement}`);
+        sections.push(formatPromptSection('Global Note Replacement', context.globalNoteReplacement));
       }
       if (agent.includeHistory) {
-        sections.push(`[Recent Conversation]\n${context.history || '(No recent conversation)'}`);
+        sections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
       }
       if (agent.includeUserInput) {
-        sections.push(`[Current User Input]\n${context.userInput || '(No current user input)'}`);
+        sections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
       }
       if (agent.includePreviousNotes) {
         const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
-        sections.push(`[${label}]\n${formatAgentNotes(context.notes, '(No previous agent notes)')}`);
+        sections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
-        sections.push(`[Previous Memory]\n${context.agentMemory || '(No saved memory)'}`);
-        sections.push(`[Memory Instruction]\n${agent.memoryInstruction || '(No memory instruction)'}`);
-        sections.push(`[Memory Format]\n${agent.memoryFormat || '(No memory format specified)'}`);
+        sections.push(formatPromptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
+        sections.push(formatPromptSection('Memory Instruction', agent.memoryInstruction || '(No memory instruction)'));
+        sections.push(formatPromptSection('Memory Format', agent.memoryFormat || '(No memory format specified)'));
       }
       if (agent.mode === 'post') {
-        sections.push(`[Current Response]\n${context.currentResponse || ''}`);
+        sections.push(formatPromptSection('Current Response', context.currentResponse || ''));
       }
 
       const outputInstruction = agent.mode === 'pre' && agent.memoryEnabled
         ? `${agent.outputInstruction}\n\n${memoryFinalOutputReminder()}`
         : agent.outputInstruction;
-      sections.push(`[${agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction'}]\n${outputInstruction}`);
+      sections.push(formatPromptSection(agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction', outputInstruction));
 
       const systemContent = [
         agent.systemPrompt,
@@ -3411,7 +3408,7 @@
           ].join('\n');
         case POST_MODE_POLISH:
         default:
-          return 'Output only the full revised response that should be shown to the user. Do not output analysis notes, explanations, or change lists.';
+          return 'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists.';
       }
     }
 
