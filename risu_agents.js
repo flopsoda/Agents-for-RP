@@ -3329,10 +3329,11 @@
     }
 
     function buildAgentPrompt(agent, context) {
-      const sections = [];
+      const contextSections = [];
+      const taskSections = [];
 
       if (agent.includeSettingBlocks) {
-        sections.push(context.settingBlocks || formatSettingBlocks({
+        contextSections.push(context.settingBlocks || formatSettingBlocks({
           characterDescription: '(No character description)',
           userDescription: '(No user description)',
           authorNote: '(No author note)',
@@ -3340,31 +3341,31 @@
         }));
       }
       if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
-        sections.push(formatPromptSection('Global Note Replacement', context.globalNoteReplacement));
+        contextSections.push(formatPromptSection('Global Note Replacement', context.globalNoteReplacement));
       }
       if (agent.includeHistory) {
-        sections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
+        contextSections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
       }
       if (agent.includeUserInput) {
-        sections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
+        taskSections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
       }
       if (agent.includePreviousNotes) {
         const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
-        sections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
+        taskSections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
-        sections.push(formatPromptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
-        sections.push(formatPromptSection('Memory Instruction', agent.memoryInstruction || '(No memory instruction)'));
-        sections.push(formatPromptSection('Memory Format', agent.memoryFormat || '(No memory format specified)'));
-      }
-      if (agent.mode === 'post') {
-        sections.push(formatPromptSection('Current Response', context.currentResponse || ''));
+        taskSections.push(formatPromptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
+        taskSections.push(formatPromptSection('Memory Instruction', agent.memoryInstruction || '(No memory instruction)'));
+        taskSections.push(formatPromptSection('Memory Format', agent.memoryFormat || '(No memory format specified)'));
       }
 
       const outputInstruction = agent.mode === 'pre' && agent.memoryEnabled
         ? `${agent.outputInstruction}\n\n${memoryFinalOutputReminder()}`
         : agent.outputInstruction;
-      sections.push(formatPromptSection(agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction', outputInstruction));
+      taskSections.push(formatPromptSection(agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction', outputInstruction));
+      if (agent.mode === 'post') {
+        taskSections.push(formatPromptSection('Current Response', context.currentResponse || ''));
+      }
 
       const systemContent = [
         agent.systemPrompt,
@@ -3377,8 +3378,9 @@
 
       const messages = [
         { role: 'system', content: systemContent },
-        { role: 'user', content: sections.join('\n\n') },
       ];
+      if (contextSections.length) messages.push({ role: 'user', content: contextSections.join('\n\n') });
+      if (taskSections.length) messages.push({ role: 'user', content: taskSections.join('\n\n') });
       const assistantPrefill = effectiveAssistantPrefill(agent);
       if (assistantPrefill) {
         messages.push({ role: 'assistant', content: assistantPrefill });
@@ -3408,7 +3410,12 @@
           ].join('\n');
         case POST_MODE_POLISH:
         default:
-          return 'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists. Only change what the post-processing instruction explicitly require; otherwise preserve the Current Response content. Do not summarize, condense, omit, expand, continue, or reinterpret it unless explicitly instructed.';
+          return [
+            'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists.',
+            'The only editable target is the content between <Current Response> and </Current Response>.',
+            'Use earlier messages and <Recent Conversation> only as context. Never copy, rewrite, summarize, continue, or output content from <Recent Conversation> unless it already appears inside <Current Response>.',
+            'Only change what the post-processing instruction explicitly require; otherwise preserve the Current Response content. Do not summarize, condense, omit, expand, continue, or reinterpret it unless explicitly instructed.',
+          ].join('\n');
       }
     }
 
