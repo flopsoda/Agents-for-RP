@@ -3408,7 +3408,7 @@
           ].join('\n');
         case POST_MODE_POLISH:
         default:
-          return 'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists.';
+          return 'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists. Only change what the post-processing instruction explicitly require; otherwise preserve the Current Response content. Do not summarize, condense, omit, expand, continue, or reinterpret it unless explicitly instructed.';
       }
     }
 
