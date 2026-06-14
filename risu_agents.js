@@ -5660,6 +5660,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .confirm-modal{width:min(440px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.54);padding:16px}
 .confirm-modal h2{font-size:1rem;margin-bottom:8px}.confirm-modal p{font-size:.86rem;color:#d6d6d6;overflow-wrap:anywhere}.confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
 .prompt-modal{padding:16px}.prompt-modal-head,.memory-modal-head,.run-log-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.modal-head-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 .prompt-modal-head{margin-bottom:12px}.memory-modal-head,.run-log-modal-head{border-bottom:1px solid var(--line);padding:14px 16px}.memory-modal-head h2,.run-log-modal-head h2{font-size:1rem;margin:0 0 4px}.memory-modal-body{padding:14px 16px 18px}
 .run-log-modal-body{padding:14px 16px 18px;overflow:auto;min-height:0}.run-log-modal-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#f5f5f5}
 .prompt-preview-meta,.memory-snapshot-meta,.run-log-modal-meta{font-size:.76rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
@@ -5838,6 +5839,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           const targetAgent = findAgentById(pipeline, event.currentTarget.getAttribute('data-memory-stack-agent-id'));
           if (targetAgent) await openMemoryStackModal(targetAgent, conf);
         });
+        bindInlineCopyButtons(root);
         root.querySelectorAll('[data-run-log-field]').forEach(button => {
           button.addEventListener('click', async (event) => {
             const field = event.currentTarget.getAttribute('data-run-log-field');
@@ -5870,6 +5872,19 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
               buttonEl.disabled = false;
               buttonEl.textContent = previousText;
             }
+          });
+        });
+        root.querySelectorAll('[data-run-log-copy-field]').forEach(button => {
+          button.addEventListener('click', async (event) => {
+            const field = event.currentTarget.getAttribute('data-run-log-copy-field');
+            const bodyKey = event.currentTarget.getAttribute('data-run-log-copy-body-key') || '';
+            const fallback = event.currentTarget.getAttribute('data-run-log-copy-fallback') || '';
+            const fallbackField = event.currentTarget.getAttribute('data-run-log-copy-fallback-field') || '';
+            const currentAgent = findAgentById(pipeline, selectedAgentId);
+            const currentResult = findRunResultForAgent(runLog, currentAgent);
+            if (!field || !currentAgent || !currentResult) return;
+
+            await copyRunLogTextFromButton(event.currentTarget, currentResult, field, bodyKey, fallback, fallbackField, conf);
           });
         });
       }
@@ -6094,6 +6109,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('memory-stack-modal')?.addEventListener('click', (event) => {
         if (event.target?.id === 'memory-stack-modal') closeMemoryStackModal();
       });
+      bindInlineCopyButtons(document.getElementById('memory-stack-modal'));
       document.querySelectorAll('[data-memory-snapshot-key]').forEach(button => {
         button.addEventListener('click', async (event) => {
           const key = event.currentTarget.getAttribute('data-memory-snapshot-key');
@@ -6103,6 +6119,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           target.innerHTML = '<div class="metric-sub">기억 내용을 불러오는 중...</div>';
           const value = await loadMemorySnapshotValue({ snapshotKey: key }, conf?.debugLog);
           target.innerHTML = detailBlockHtml('기억 내용', value || EMPTY_AGENT_MEMORY);
+          bindInlineCopyButtons(target);
         });
       });
     }
@@ -6168,8 +6185,20 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return Number.isFinite(numeric) && numeric > 0 ? new Date(numeric).toLocaleString() : '시간 정보 없음';
     }
 
+    let copyTargetIdSeq = 0;
+
+    function nextCopyTargetId(prefix = 'copy-target') {
+      copyTargetIdSeq += 1;
+      return `${prefix}-${Date.now().toString(36)}-${copyTargetIdSeq}`;
+    }
+
     function detailBlockHtml(title, text) {
-      return `<div class="detail-block"><h3>${escHtml(title)}</h3><pre>${escHtml(text)}</pre></div>`;
+      const textId = nextCopyTargetId('detail-copy-target');
+      return `<div class="detail-block">
+        <h3>${escHtml(title)}</h3>
+        <div class="detail-actions"><button class="ghost" data-copy-target-id="${escHtml(textId)}">복사</button></div>
+        <pre id="${escHtml(textId)}">${escHtml(text)}</pre>
+      </div>`;
     }
 
     function openRunLogTextModal(options) {
@@ -6179,6 +6208,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('run-log-text-modal')?.addEventListener('click', (event) => {
         if (event.target?.id === 'run-log-text-modal') closeRunLogTextModal();
       });
+      bindInlineCopyButtons(document.getElementById('run-log-text-modal'));
       document.addEventListener('keydown', handleRunLogTextModalKeydown);
       document.getElementById('run-log-text-close')?.focus();
     }
@@ -6202,6 +6232,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       const charCount = runLogTextChars(result, options?.field || '', text);
       const storageState = options?.bodyKey ? '본문 저장됨' : (options?.hasInline ? '인라인 저장됨' : '본문 없음');
       const meta = `Row ${agent.row !== undefined ? agent.row + 1 : '?'} · ${modeLabel}${postMode} · 전문 ${charCount}자 · ${storageState}`;
+      const textId = nextCopyTargetId('run-log-modal-copy-target');
       return `<div id="run-log-text-modal" class="modal-backdrop">
         <div class="run-log-modal" role="dialog" aria-modal="true" aria-labelledby="run-log-text-title">
           <div class="run-log-modal-head">
@@ -6209,11 +6240,85 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
               <h2 id="run-log-text-title">${escHtml(title)}</h2>
               <div class="run-log-modal-meta">${escHtml(agent.name || '(이름 없음)')} · ${escHtml(meta)}</div>
             </div>
-            <button id="run-log-text-close" class="ghost">닫기</button>
+            <div class="modal-head-actions">
+              <button class="ghost" data-copy-target-id="${escHtml(textId)}">복사</button>
+              <button id="run-log-text-close" class="ghost">닫기</button>
+            </div>
           </div>
-          <div class="run-log-modal-body"><pre>${escHtml(text || '(본문 없음)')}</pre></div>
+          <div class="run-log-modal-body"><pre id="${escHtml(textId)}">${escHtml(text || '(본문 없음)')}</pre></div>
         </div>
       </div>`;
+    }
+
+    function bindInlineCopyButtons(root = document) {
+      const scope = root || document;
+      scope.querySelectorAll('[data-copy-target-id]').forEach((button) => {
+        if (button.getAttribute('data-copy-bound') === 'true') return;
+        button.setAttribute('data-copy-bound', 'true');
+        button.addEventListener('click', async (event) => {
+          const buttonEl = event.currentTarget;
+          const targetId = buttonEl.getAttribute('data-copy-target-id') || '';
+          const target = targetId ? document.getElementById(targetId) : null;
+          await copyTextFromButton(buttonEl, () => target ? String(target.textContent || '') : '');
+        });
+      });
+    }
+
+    async function copyRunLogTextFromButton(buttonEl, source, field, bodyKey, fallback = '', fallbackField = '', conf = null) {
+      await copyTextFromButton(buttonEl, async () => {
+        const storedText = bodyKey ? await loadRunLogBodyValue(bodyKey, conf?.debugLog) : '';
+        return storedText || runLogModalFieldValue(source, field, fallback, fallbackField) || fallback || '(본문 없음)';
+      });
+    }
+
+    async function copyTextFromButton(buttonEl, textProvider) {
+      const previousText = buttonEl.textContent;
+      buttonEl.disabled = true;
+      buttonEl.textContent = '불러오는 중...';
+      let copied = false;
+      try {
+        const text = typeof textProvider === 'function' ? await textProvider() : textProvider;
+        await copyTextToClipboard(text);
+        copied = true;
+      } catch (err) {
+        console.log(`Agents! copy failed: ${err?.message || err || 'unknown error'}`);
+      } finally {
+        buttonEl.textContent = copied ? '복사됨' : '복사 실패';
+        setTimeout(() => {
+          buttonEl.disabled = false;
+          buttonEl.textContent = previousText;
+        }, 900);
+      }
+    }
+
+    async function copyTextToClipboard(text) {
+      const value = String(text ?? '');
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(value);
+          return;
+        } catch (_) {
+          // Fall through to the textarea path for embedded webview environments.
+        }
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+
+      try {
+        const copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+        if (!copied) throw new Error('document.execCommand("copy") returned false');
+      } finally {
+        textarea.remove();
+      }
     }
 
     function runLogFieldValue(source, field, fallback = '') {
@@ -6252,7 +6357,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
     }
 
     function runLogFullTextButtonHtml(title, field, bodyKey, fallback = '', fallbackField = '') {
-      return `<div class="detail-actions"><button class="ghost" data-run-log-field="${escHtml(field)}" data-run-log-title="${escHtml(title)}" data-run-log-body-key="${escHtml(bodyKey || '')}" data-run-log-fallback="${escHtml(fallback)}" data-run-log-fallback-field="${escHtml(fallbackField)}">전문 보기</button></div>`;
+      return `<div class="detail-actions">
+        <button class="ghost" data-run-log-field="${escHtml(field)}" data-run-log-title="${escHtml(title)}" data-run-log-body-key="${escHtml(bodyKey || '')}" data-run-log-fallback="${escHtml(fallback)}" data-run-log-fallback-field="${escHtml(fallbackField)}">전문 보기</button>
+        <button class="ghost" data-run-log-copy-field="${escHtml(field)}" data-run-log-copy-body-key="${escHtml(bodyKey || '')}" data-run-log-copy-fallback="${escHtml(fallback)}" data-run-log-copy-fallback-field="${escHtml(fallbackField)}">복사</button>
+      </div>`;
     }
 
     function runLogDetailBlockHtml(title, source, field, fallback = '', options = {}) {
