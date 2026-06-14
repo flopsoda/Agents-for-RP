@@ -2834,6 +2834,12 @@
     const DEFAULT_OUTPUT_POST_SUFFIX =
       '현재 응답 뒤에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
     const DEFAULT_OUTPUT_POST = DEFAULT_OUTPUT_POST_POLISH;
+    const SETTING_PROMPT_SECTION_NAMES = [
+      'Character Description',
+      'User Description',
+      'Author\'s Note',
+      'Active Lorebooks',
+    ];
     const LEGACY_DEFAULT_POST_SYSTEM_PROMPT =
       '당신은 RP 응답 후처리 에이전트입니다. 현재 응답을 설정, 사전 에이전트 노트, 문맥에 맞게 자연스럽게 수정하세요.';
     const LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT =
@@ -3361,20 +3367,20 @@
       const taskSections = [];
 
       if (agent.includeSettingBlocks) {
-        contextSections.push(context.settingBlocks || formatSettingBlocks({
+        contextSections.push(promptSectionGroup(SETTING_PROMPT_SECTION_NAMES, context.settingBlocks || formatSettingBlocks({
           characterDescription: '(No character description)',
           userDescription: '(No user description)',
           authorNote: '(No author note)',
           activeLorebooks: [],
-        }));
+        })));
       }
       if (agent.includeGlobalNoteReplacement && context.globalNoteReplacement) {
-        contextSections.push(formatPromptSection('Global Note Replacement', context.globalNoteReplacement));
+        contextSections.push(promptSection('Global Note Replacement', context.globalNoteReplacement));
       }
       if (agent.includeHistory) {
-        contextSections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
+        contextSections.push(promptSection('Recent Conversation', context.history || '(No recent conversation)'));
         if (agent.mode === 'post') {
-          turnContextSections.push(formatPromptSection(
+          turnContextSections.push(promptSection(
             'Latest Previous Assistant Response',
             context.latestPreviousAssistantResponse || '(No latest previous assistant response)',
           ));
@@ -3382,41 +3388,38 @@
       }
       if (agent.includeUserInput) {
         const targetSections = agent.mode === 'post' ? turnContextSections : taskSections;
-        targetSections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
+        targetSections.push(promptSection('Current User Input', context.userInput || '(No current user input)'));
       }
       if (agent.includePreviousNotes) {
         const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
         const targetSections = agent.mode === 'post' ? turnContextSections : taskSections;
-        targetSections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
+        targetSections.push(promptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
-        taskSections.push(formatPromptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
-        taskSections.push(formatPromptSection('Memory Instruction', agent.memoryInstruction || '(No memory instruction)'));
-        taskSections.push(formatPromptSection('Memory Format', agent.memoryFormat || '(No memory format specified)'));
+        taskSections.push(promptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
+        taskSections.push(promptSection('Memory Instruction', agent.memoryInstruction || '(No memory instruction)'));
+        taskSections.push(promptSection('Memory Format', agent.memoryFormat || '(No memory format specified)'));
       }
 
       const outputInstruction = agent.mode === 'pre' && agent.memoryEnabled
         ? `${agent.outputInstruction}\n\n${memoryFinalOutputReminder()}`
         : agent.outputInstruction;
-      taskSections.push(formatPromptSection(agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction', outputInstruction));
+      taskSections.push(promptSection(agent.mode === 'post' ? 'Post-processing Instruction' : 'Current Agent Instruction', outputInstruction));
       if (agent.mode === 'post') {
-        taskSections.push(formatPromptSection('Current Response', context.currentResponse || ''));
+        taskSections.push(promptSection('Current Response', context.currentResponse || ''));
       }
 
       const messages = [
-        { role: 'system', content: agent.systemPrompt },
+        { role: 'system', content: buildAgentSystemPrompt(agent, contextSections, turnContextSections, taskSections) },
       ];
       if (contextSections.length) {
-        messages.push({ role: 'system', content: referenceContextGuard() });
-        messages.push({ role: 'user', content: contextSections.join('\n\n') });
+        messages.push({ role: 'user', content: formatPromptSection('Reference Context Blocks', promptSectionsContent(contextSections)) });
       }
       if (turnContextSections.length) {
-        messages.push({ role: 'system', content: immediateTurnContextGuard() });
-        messages.push({ role: 'user', content: turnContextSections.join('\n\n') });
+        messages.push({ role: 'user', content: formatPromptSection('Immediate Turn Context Blocks', promptSectionsContent(turnContextSections)) });
       }
       if (taskSections.length) {
-        messages.push({ role: 'system', content: agentTaskGuard(agent) });
-        messages.push({ role: 'user', content: taskSections.join('\n\n') });
+        messages.push({ role: 'user', content: formatPromptSection('Task Blocks', promptSectionsContent(taskSections)) });
       }
       const assistantPrefill = effectiveAssistantPrefill(agent);
       if (assistantPrefill) {
@@ -3425,44 +3428,113 @@
       return messages;
     }
 
-    function referenceContextGuard() {
-      return [
-        'The next user message contains reference context only.',
-        'Use it only to understand setting, prior state, and continuity.',
-        'Do not copy, imitate, or derive output formatting from this reference context unless the actual task explicitly asks for it.',
-        'For output formatting, follow the agent system prompt and the actual task message only.',
-        'Do not rewrite, continue, summarize, or output text from that reference context.',
-      ].join('\n');
+    function promptSection(name, content) {
+      return { names: [name], content: formatPromptSection(name, content) };
     }
 
-    function immediateTurnContextGuard() {
-      return [
-        'The next user message contains immediate turn context for the current post-processing task.',
-        'Use <Latest Previous Assistant Response> as the primary source for previous state and existing status-window values.',
-        'Do not imitate its prose or Markdown formatting unless it contains a valid documented status-window block.',
-        'Use <Current User Input> to understand what <Current Response> is answering.',
-        'Use <Pre-Agent Notes> only as auxiliary context if present.',
-        'Do not output this context directly.',
-      ].join('\n');
+    function promptSectionGroup(names, content) {
+      return { names: Array.isArray(names) ? names.slice() : [], content: String(content ?? '') };
     }
 
-    function agentTaskGuard(agent) {
-      const lines = agent?.mode === 'post'
-        ? [
-            'The next user message contains the actual post-processing task.',
-            'Only the content inside <Current Response> and </Current Response> is editable.',
-            'Apply <Post-processing Instruction> to that content only.',
+    function promptSectionsContent(sections) {
+      return (Array.isArray(sections) ? sections : [])
+        .map(section => section?.content ?? '')
+        .join('\n\n');
+    }
+
+    function promptSectionNames(sections) {
+      const names = [];
+      (Array.isArray(sections) ? sections : []).forEach(section => {
+        (Array.isArray(section?.names) ? section.names : []).forEach(name => {
+          if (name && !names.includes(name)) names.push(name);
+        });
+      });
+      return names;
+    }
+
+    function buildAgentSystemPrompt(agent, contextSections, turnContextSections, taskSections) {
+      return [
+        agent.systemPrompt,
+        agentMessageProtocol(agent, contextSections, turnContextSections, taskSections),
+      ]
+        .filter(part => String(part || '').trim())
+        .join('\n\n');
+    }
+
+    function agentMessageProtocol(agent, contextSections, turnContextSections, taskSections) {
+      const referenceNames = promptSectionNames(contextSections);
+      const turnNames = promptSectionNames(turnContextSections);
+      const taskNames = promptSectionNames(taskSections);
+      const lines = [
+        'Agents! Message Protocol',
+        'All user messages after this system message are grouped data blocks. Treat group wrapper tags as labels, not content to output.',
+        'Do not output group wrapper tags or input section tags unless the task output contract explicitly requires tags.',
+      ];
+
+      if (referenceNames.length) {
+        lines.push(
+          '',
+          'Reference context blocks in this request:',
+          ...formatPromptBlockNameList(referenceNames),
+          'Use these blocks only for setting, prior state, continuity, and world understanding.',
+          'Do not copy, rewrite, continue, summarize, imitate prose from, or derive output formatting from these blocks.',
+        );
+      }
+
+      if (turnNames.length) {
+        lines.push(
+          '',
+          'Immediate turn context blocks in this request:',
+          ...formatPromptBlockNameList(turnNames),
+        );
+        if (turnNames.includes('Latest Previous Assistant Response')) {
+          lines.push(
+            'Use <Latest Previous Assistant Response> only to recover explicit prior-state values needed for continuity.',
+            'Do not copy, continue, summarize, imitate prose from, or derive output formatting from it.',
+          );
+        }
+        if (turnNames.includes('Current User Input')) {
+          lines.push('Use <Current User Input> only to understand what <Current Response> is answering.');
+        }
+        if (turnNames.includes('Pre-Agent Notes')) {
+          lines.push('Use <Pre-Agent Notes> only as auxiliary context if present.');
+        }
+        lines.push('Do not output these blocks directly.');
+      }
+
+      if (taskNames.length) {
+        lines.push(
+          '',
+          'Task blocks in this request:',
+          ...formatPromptBlockNameList(taskNames),
+        );
+        if (agent?.mode === 'post') {
+          lines.push(
+            '<Post-processing Instruction> describes the current post-processing task.',
+            '<Current Response> is the only editable target.',
+            'Apply <Post-processing Instruction> only to <Current Response>.',
             'Return only the required post-processed output.',
+            'Do not output <Task Blocks>, <Post-processing Instruction>, or <Current Response> tags.',
             '',
             postModeOutputContract(agent.postMode),
-          ]
-        : [
-            'The next user message contains the actual pre-processing task for auxiliary analysis.',
+          );
+        } else {
+          lines.push(
+            '<Current Agent Instruction> describes the requested auxiliary analysis.',
             'Do not write the final RP response.',
-            'Use the task input only to produce the requested auxiliary note.',
-            ...(agent?.memoryEnabled ? ['', memoryOutputContract(agent)] : []),
-          ];
+            'Use the task blocks only to produce the requested auxiliary note.',
+          );
+          if (agent?.memoryEnabled) {
+            lines.push('', memoryOutputContract(agent));
+          }
+        }
+      }
+
       return lines.join('\n');
+    }
+
+    function formatPromptBlockNameList(names) {
+      return names.map(name => `- <${name}>`);
     }
 
     function effectiveAssistantPrefill(agent) {
@@ -3491,6 +3563,7 @@
             'Output only the full revised current response that should be shown to the user. Do not output analysis notes, explanations, or change lists.',
             'The only editable target is the content between <Current Response> and </Current Response>.',
             'Use earlier messages and <Recent Conversation> only as context. Never copy, rewrite, summarize, continue, or output content from <Recent Conversation> unless it already appears inside <Current Response>.',
+            'Preserve existing headings, separators, and structural markers inside <Current Response> unless the post-processing instruction explicitly changes them.',
             'Only change what the post-processing instruction explicitly require; otherwise preserve the Current Response content. Do not summarize, condense, omit, expand, continue, or reinterpret it unless explicitly instructed.',
           ].join('\n');
       }
@@ -7201,25 +7274,23 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             ];
 
         return {
-          settingBlocks: [
-            '[캐릭터 설명]',
-            '(실제 채팅 실행 시 캐릭터 설명이 들어갑니다)',
-            '',
-            '[유저 설명]',
-            '(선택된 페르소나 설명이 들어갑니다)',
-            '',
-            '[작가의 노트]',
-            '(현재 채팅 작가의 노트가 들어갑니다)',
-            '',
-            '[현재 활성화된 로어북]',
-            '(실제 요청에 포함된 활성 로어북이 들어갑니다)',
-          ].join('\n'),
+          settingBlocks: formatSettingBlocks({
+            characterDescription: '(실제 채팅 실행 시 캐릭터 설명이 들어갑니다)',
+            userDescription: '(선택된 페르소나 설명이 들어갑니다)',
+            authorNote: '(현재 채팅 작가의 노트가 들어갑니다)',
+            activeLorebooks: [
+              {
+                label: 'Preview',
+                content: '(실제 요청에 포함된 활성 로어북이 들어갑니다)',
+              },
+            ],
+          }),
           globalNoteReplacement:
             '(현재 캐릭터의 글로벌 노트 덮어쓰기 내용이 들어갑니다)',
           history:
             '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다. 짧은 대화에서는 봇 첫 메시지도 포함됩니다)',
           latestPreviousAssistantResponse:
-            '(최신 사용자 입력 직전의 assistant 응답이 들어갑니다. 상태창 값과 직전 상태 복구 기준으로 우선 사용됩니다)',
+            '(최신 사용자 입력 직전의 assistant 응답이 들어갑니다. 명시적 직전 상태값과 연속성 복구 기준으로만 사용됩니다)',
           userInput:
             '(실제 사용자의 최신 입력이 들어갑니다)',
           notes: placeholderNotes,
