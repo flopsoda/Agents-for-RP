@@ -3363,11 +3363,13 @@
         contextSections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
       }
       if (agent.includeUserInput) {
-        taskSections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
+        const targetSections = agent.mode === 'post' ? contextSections : taskSections;
+        targetSections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
       }
       if (agent.includePreviousNotes) {
         const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
-        taskSections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
+        const targetSections = agent.mode === 'post' ? contextSections : taskSections;
+        targetSections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
         taskSections.push(formatPromptSection('Previous Memory', context.agentMemory || '(No saved memory)'));
@@ -6911,6 +6913,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const outputInstructionPlaceholder = agent.mode === 'post'
           ? '예: **Current Response**에 필요한 후처리 요소만 추가하세요. 분석 메모, 설명, 변경 목록은 출력하지 마세요.'
           : '예: 이번 입력에서 다음 모델이 참고할 관찰과 제안만 간결하게 정리하세요.';
+        const outputInstructionHelp = agent.mode === 'post'
+          ? 'Current Response에 무엇을 할지 적으세요. System Prompt의 기준을 반복하기보다 이번 후처리 작업만 구체적으로 적는 편이 안정적입니다.'
+          : 'Current User Input을 분석해 어떤 보조 노트를 만들지 적으세요. System Prompt의 기준을 반복하기보다 이번 분석 작업만 구체적으로 적는 편이 안정적입니다.';
 
         root.innerHTML = `<h2>Agent Editor</h2>
           <div class="field"><label for="edit_name">Name</label><input id="edit_name" type="text" value="${escHtml(agent.name)}"></div>
@@ -6918,7 +6923,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           <div class="field"><label for="edit_modelPresetId">Model Preset</label>${modelPresetSelect('edit_modelPresetId', agent.modelPresetId, modelPresetsState)}</div>
           ${postModeEditor}
           <div class="field"><label for="edit_systemPrompt">System Prompt</label><div class="example-url">역할, 스타일, 세계관 규칙, 출력 형식의 기준을 적으세요. 이번 턴에 무엇을 수정/추가할지는 Output Instruction에 적는 편이 안정적입니다.</div><textarea id="edit_systemPrompt" placeholder="${escHtml(systemPromptPlaceholder)}">${escHtml(agent.systemPrompt)}</textarea></div>
-          <div class="field"><label for="edit_outputInstruction">Output Instruction</label><div class="example-url">이번 입력에 적용할 작업을 적으세요. System Prompt의 기준을 반복하기보다 Current Response나 Current User Input에 무엇을 할지 적는 편이 안정적입니다.</div><textarea id="edit_outputInstruction" placeholder="${escHtml(outputInstructionPlaceholder)}">${escHtml(agent.outputInstruction)}</textarea></div>
+          <div class="field"><label for="edit_outputInstruction">Output Instruction</label><div class="example-url">${escHtml(outputInstructionHelp)}</div><textarea id="edit_outputInstruction" placeholder="${escHtml(outputInstructionPlaceholder)}">${escHtml(agent.outputInstruction)}</textarea></div>
           ${assistantPrefillEditor}
           <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함 (캐릭터/페르소나/작노/로어북)</label>
           <label class="checkline"><input id="edit_includeGlobalNoteReplacement" type="checkbox" ${agent.includeGlobalNoteReplacement ? 'checked' : ''}> 글로벌 노트 덮어쓰기 포함</label>
