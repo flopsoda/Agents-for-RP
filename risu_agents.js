@@ -3428,7 +3428,9 @@
     function referenceContextGuard() {
       return [
         'The next user message contains reference context only.',
-        'Use it to understand setting, formatting, prior state, and continuity.',
+        'Use it only to understand setting, prior state, and continuity.',
+        'Do not copy, imitate, or derive output formatting from this reference context unless the actual task explicitly asks for it.',
+        'For output formatting, follow the agent system prompt and the actual task message only.',
         'Do not rewrite, continue, summarize, or output text from that reference context.',
       ].join('\n');
     }
@@ -3436,7 +3438,8 @@
     function immediateTurnContextGuard() {
       return [
         'The next user message contains immediate turn context for the current post-processing task.',
-        'Use <Latest Previous Assistant Response> as the primary source for previous state, status windows, and last known output format.',
+        'Use <Latest Previous Assistant Response> as the primary source for previous state and existing status-window values.',
+        'Do not imitate its prose or Markdown formatting unless it contains a valid documented status-window block.',
         'Use <Current User Input> to understand what <Current Response> is answering.',
         'Use <Pre-Agent Notes> only as auxiliary context if present.',
         'Do not output this context directly.',
@@ -7108,7 +7111,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           history:
             '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다. 짧은 대화에서는 봇 첫 메시지도 포함됩니다)',
           latestPreviousAssistantResponse:
-            '(최신 사용자 입력 직전의 assistant 응답이 들어갑니다. 상태창/직전 출력 형식 갱신 기준으로 우선 사용됩니다)',
+            '(최신 사용자 입력 직전의 assistant 응답이 들어갑니다. 상태창 값과 직전 상태 복구 기준으로 우선 사용됩니다)',
           userInput:
             '(실제 사용자의 최신 입력이 들어갑니다)',
           notes: placeholderNotes,
