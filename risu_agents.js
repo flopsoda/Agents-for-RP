@@ -1064,6 +1064,7 @@
       return {
         ...sources,
         contextMessages,
+        latestPreviousAssistantResponse: getLatestPreviousAssistantResponse(contextMessages),
         maxWindow,
         loreCandidates,
         activeLorebooks: loreMatch.activeLorebooks,
@@ -1273,6 +1274,16 @@
     function getUserInput(messages) {
       const userMsgs = messages.filter(m => m.role === 'user');
       return userMsgs.length ? userMsgs[userMsgs.length - 1].content : '';
+    }
+
+    function getLatestPreviousAssistantResponse(messages) {
+      const list = Array.isArray(messages) ? messages : [];
+      for (let idx = list.length - 1; idx >= 0; idx -= 1) {
+        if (list[idx]?.role === 'assistant') {
+          return String(list[idx]?.content || '');
+        }
+      }
+      return '';
     }
 
     function formatHistory(messages, windowSize) {
@@ -3346,6 +3357,7 @@
 
     function buildAgentPrompt(agent, context) {
       const contextSections = [];
+      const turnContextSections = [];
       const taskSections = [];
 
       if (agent.includeSettingBlocks) {
@@ -3361,14 +3373,20 @@
       }
       if (agent.includeHistory) {
         contextSections.push(formatPromptSection('Recent Conversation', context.history || '(No recent conversation)'));
+        if (agent.mode === 'post') {
+          turnContextSections.push(formatPromptSection(
+            'Latest Previous Assistant Response',
+            context.latestPreviousAssistantResponse || '(No latest previous assistant response)',
+          ));
+        }
       }
       if (agent.includeUserInput) {
-        const targetSections = agent.mode === 'post' ? contextSections : taskSections;
+        const targetSections = agent.mode === 'post' ? turnContextSections : taskSections;
         targetSections.push(formatPromptSection('Current User Input', context.userInput || '(No current user input)'));
       }
       if (agent.includePreviousNotes) {
         const label = agent.mode === 'post' ? 'Pre-Agent Notes' : 'Previous Agent Notes';
-        const targetSections = agent.mode === 'post' ? contextSections : taskSections;
+        const targetSections = agent.mode === 'post' ? turnContextSections : taskSections;
         targetSections.push(formatPromptSection(label, formatAgentNotes(context.notes, '(No previous agent notes)')));
       }
       if (agent.mode === 'pre' && agent.memoryEnabled) {
@@ -3392,6 +3410,10 @@
         messages.push({ role: 'system', content: referenceContextGuard() });
         messages.push({ role: 'user', content: contextSections.join('\n\n') });
       }
+      if (turnContextSections.length) {
+        messages.push({ role: 'system', content: immediateTurnContextGuard() });
+        messages.push({ role: 'user', content: turnContextSections.join('\n\n') });
+      }
       if (taskSections.length) {
         messages.push({ role: 'system', content: agentTaskGuard(agent) });
         messages.push({ role: 'user', content: taskSections.join('\n\n') });
@@ -3408,6 +3430,16 @@
         'The next user message contains reference context only.',
         'Use it to understand setting, formatting, prior state, and continuity.',
         'Do not rewrite, continue, summarize, or output text from that reference context.',
+      ].join('\n');
+    }
+
+    function immediateTurnContextGuard() {
+      return [
+        'The next user message contains immediate turn context for the current post-processing task.',
+        'Use <Latest Previous Assistant Response> as the primary source for previous state, status windows, and last known output format.',
+        'Use <Current User Input> to understand what <Current Response> is answering.',
+        'Use <Pre-Agent Notes> only as auxiliary context if present.',
+        'Do not output this context directly.',
       ].join('\n');
     }
 
@@ -4842,10 +4874,15 @@
           ? transientContext.runContext.historyForWindow(agentConf.window)
           : '';
         const userInput = String(transientContext?.userInput || previousRun.userInput || '');
+        const latestPreviousAssistantResponse = firstNonEmpty(
+          transientContext?.runContext?.latestPreviousAssistantResponse,
+          getLatestPreviousAssistantResponse(transientContext?.chatContext?.messages),
+        );
         const rawPrompt = buildAgentPrompt(agent, {
           settingBlocks: previousRun.settingBlocks,
           globalNoteReplacement: previousRun.globalNoteReplacement || '',
           history,
+          latestPreviousAssistantResponse,
           userInput,
           notes: previousRun.notes,
           currentResponse,
@@ -7070,6 +7107,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
             '(현재 캐릭터의 글로벌 노트 덮어쓰기 내용이 들어갑니다)',
           history:
             '(선택한 Model Preset의 contextWindow 기준 최근 대화가 들어갑니다. 짧은 대화에서는 봇 첫 메시지도 포함됩니다)',
+          latestPreviousAssistantResponse:
+            '(최신 사용자 입력 직전의 assistant 응답이 들어갑니다. 상태창/직전 출력 형식 갱신 기준으로 우선 사용됩니다)',
           userInput:
             '(실제 사용자의 최신 입력이 들어갑니다)',
           notes: placeholderNotes,
