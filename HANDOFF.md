@@ -8,6 +8,8 @@ Pending unreleased changes since v1.1.22:
 - Updated default post-agent system/output prompts for role separation, while migrating only exact legacy default strings and preserving custom prompts.
 - Moved post-agent Current User Input and Pre-Agent Notes into the reference context message so the post-agent task message contains only Post-processing Instruction and Current Response.
 - Refined Output Instruction help text so post-agents point at Current Response and pre-agents point at Current User Input.
+- Added post-agent immediate turn context with `<Latest Previous Assistant Response>` before Current User Input/Pre-Agent Notes so status windows and previous-state updates have a clear latest baseline.
+- Added an immediate turn context guard telling post-agents to prefer Latest Previous Assistant Response for previous state, status windows, and last known output format.
 
 Files touched:
 - `risu_agents.js`
@@ -20,11 +22,13 @@ Checks run:
 - `rg -n "DEFAULT_OUTPUT_POST_POLISH|LEGACY_DEFAULT_OUTPUT_POST_POLISH|LEGACY_DEFAULT_POST_SYSTEM_PROMPT|defaultSystemPromptForMode|normalizeAgentSystemPrompt|normalizeAgentOutputInstruction|referenceContextGuard|agentTaskGuard" risu_agents.js`
 - `rg -n "Current User Input|Pre-Agent Notes|Post-processing Instruction|Current Response|referenceContextGuard|agentTaskGuard" risu_agents.js`
 - `rg -n "Current Response에 무엇을|Current User Input" risu_agents.js`
+- `rg -n "Latest Previous Assistant Response|latestPreviousAssistantResponse|immediate turn context|getLatest" risu_agents.js`
 - JXA syntax compile with `new Function(...)`
 - Perl static prompt split assertions
 - Perl static prompt guard assertions
 - Perl static prompt message order assertions
 - Perl static post/pre section placement assertions
+- Perl static immediate turn context assertions
 
 Checks not run:
 - Node `node --check` / `vm.Script` checks could not run because `node` is not available on PATH.
@@ -34,6 +38,7 @@ Commits:
 - `89ff5ed` Split agent prompts into context and task messages
 - `645624f` Separate agent prompt roles with guard messages
 - `07f1f6c` Move post-agent user input into reference context
+- `eb292f1` Add immediate turn context for post agents
 
 Release status:
 - Version bump, tag, push, and GitHub Release intentionally skipped until the user requests release.
