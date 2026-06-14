@@ -2814,13 +2814,17 @@
       '위 분석 노트들을 반드시 반영하여 최종 RP 응답을 작성하세요.';
     const DEFAULT_OUTPUT_PRE =
       '간결한 불릿 포인트로 관찰과 제안만 정리하세요. 실제 RP 본문이나 최종 응답 문장은 작성하지 마세요.';
-    const DEFAULT_OUTPUT_POST_POLISH =
+    const LEGACY_DEFAULT_OUTPUT_POST_POLISH =
       '메인 모델 응답을 수정한 최종 사용자 응답만 출력하세요. 분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.';
+    const DEFAULT_OUTPUT_POST_POLISH =
+      '**Current Response**에 필요한 후처리 요소만 추가하거나 수정하세요. 분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요. 출력 언어는 현재 current response의 언어와 동일하게 출력하세요.';
     const DEFAULT_OUTPUT_POST_PREFIX =
       '현재 응답 앞에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
     const DEFAULT_OUTPUT_POST_SUFFIX =
       '현재 응답 뒤에 자연스럽게 붙일 짧은 추가 텍스트만 출력하세요. 현재 응답 본문은 반복하지 마세요.';
     const DEFAULT_OUTPUT_POST = DEFAULT_OUTPUT_POST_POLISH;
+    const LEGACY_DEFAULT_POST_SYSTEM_PROMPT =
+      '당신은 RP 응답 후처리 에이전트입니다. 현재 응답을 설정, 사전 에이전트 노트, 문맥에 맞게 자연스럽게 수정하세요.';
     const LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT =
       '당신은 대사와 말투 에이전트입니다.\n' +
       '세계관, 플롯, 캐릭터 메모를 바탕으로 이번 장면에서 참고할 발화 기준만 정리하세요.\n' +
@@ -3184,7 +3188,7 @@
         row,
         column: Number.isFinite(Number(agent?.column)) ? Number(agent.column) : column,
         systemPrompt,
-        outputInstruction: String(agent?.outputInstruction || (mode === 'pre' ? DEFAULT_OUTPUT_PRE : defaultOutputInstructionForPostMode(postMode))),
+        outputInstruction: normalizeAgentOutputInstruction(agent, mode, postMode),
         modelPresetId,
         ...(mode === 'post' ? { postMode } : {}),
         includeSettingBlocks: agent?.includeSettingBlocks !== undefined
@@ -3203,11 +3207,22 @@
     }
 
     function normalizeAgentSystemPrompt(agent, mode) {
-      const systemPrompt = String(agent?.systemPrompt || defaultSystemPromptForMode(mode));
+      const fallback = defaultSystemPromptForMode(mode);
+      const systemPrompt = String(agent?.systemPrompt || fallback);
       if (agent?.id === 'agent-dialogue' && systemPrompt === LEGACY_DEFAULT_DIALOGUE_SYSTEM_PROMPT) {
         return DEFAULT_DIALOGUE_SYSTEM_PROMPT;
       }
+      if (mode === 'post' && systemPrompt === LEGACY_DEFAULT_POST_SYSTEM_PROMPT) {
+        return fallback;
+      }
       return systemPrompt;
+    }
+
+    function normalizeAgentOutputInstruction(agent, mode, postMode) {
+      const outputInstruction = String(agent?.outputInstruction || '');
+      if (mode === 'pre') return outputInstruction || DEFAULT_OUTPUT_PRE;
+      if (isDefaultPostOutputInstruction(outputInstruction)) return defaultOutputInstructionForPostMode(postMode);
+      return outputInstruction;
     }
 
     function normalizePostMode(value) {
@@ -3231,6 +3246,7 @@
       const text = String(value || '').trim();
       return !text || [
         DEFAULT_OUTPUT_POST_POLISH,
+        LEGACY_DEFAULT_OUTPUT_POST_POLISH,
         DEFAULT_OUTPUT_POST_PREFIX,
         DEFAULT_OUTPUT_POST_SUFFIX,
         DEFAULT_OUTPUT_POST,
@@ -3259,7 +3275,7 @@
 
     function defaultSystemPromptForMode(mode) {
       if (mode === 'post') {
-        return '당신은 RP 응답 후처리 에이전트입니다. 현재 응답을 설정, 사전 에이전트 노트, 문맥에 맞게 자연스럽게 수정하세요.';
+        return '당신은 RP 응답 후처리 에이전트입니다. 설정, 문맥, 스타일, 출력 형식 기준을 일관되게 적용하세요.';
       }
       return '당신은 RP 보조 분석 에이전트입니다. 현재 요청에 도움이 되는 간결한 메모를 작성하세요.';
     }
@@ -3367,25 +3383,49 @@
         taskSections.push(formatPromptSection('Current Response', context.currentResponse || ''));
       }
 
-      const systemContent = [
-        agent.systemPrompt,
-        '',
-        agent.mode === 'post'
-          ? postModeOutputContract(agent.postMode)
-          : 'Do not write the final RP response. Write auxiliary notes only.',
-        agent.mode === 'pre' && agent.memoryEnabled ? `\n${memoryOutputContract(agent)}` : '',
-      ].join('\n');
-
       const messages = [
-        { role: 'system', content: systemContent },
+        { role: 'system', content: agent.systemPrompt },
       ];
-      if (contextSections.length) messages.push({ role: 'user', content: contextSections.join('\n\n') });
-      if (taskSections.length) messages.push({ role: 'user', content: taskSections.join('\n\n') });
+      if (contextSections.length) {
+        messages.push({ role: 'system', content: referenceContextGuard() });
+        messages.push({ role: 'user', content: contextSections.join('\n\n') });
+      }
+      if (taskSections.length) {
+        messages.push({ role: 'system', content: agentTaskGuard(agent) });
+        messages.push({ role: 'user', content: taskSections.join('\n\n') });
+      }
       const assistantPrefill = effectiveAssistantPrefill(agent);
       if (assistantPrefill) {
         messages.push({ role: 'assistant', content: assistantPrefill });
       }
       return messages;
+    }
+
+    function referenceContextGuard() {
+      return [
+        'The next user message contains reference context only.',
+        'Use it to understand setting, formatting, prior state, and continuity.',
+        'Do not rewrite, continue, summarize, or output text from that reference context.',
+      ].join('\n');
+    }
+
+    function agentTaskGuard(agent) {
+      const lines = agent?.mode === 'post'
+        ? [
+            'The next user message contains the actual post-processing task.',
+            'Only the content inside <Current Response> and </Current Response> is editable.',
+            'Apply <Post-processing Instruction> to that content only.',
+            'Return only the required post-processed output.',
+            '',
+            postModeOutputContract(agent.postMode),
+          ]
+        : [
+            'The next user message contains the actual pre-processing task for auxiliary analysis.',
+            'Do not write the final RP response.',
+            'Use the task input only to produce the requested auxiliary note.',
+            ...(agent?.memoryEnabled ? ['', memoryOutputContract(agent)] : []),
+          ];
+      return lines.join('\n');
     }
 
     function effectiveAssistantPrefill(agent) {
@@ -6865,14 +6905,20 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const postModeEditor = agent.mode === 'post'
           ? `<div class="field"><label for="edit_postMode">후처리 방식</label>${postModeSelect('edit_postMode', agent.postMode)}</div>`
           : '';
+        const systemPromptPlaceholder = agent.mode === 'post'
+          ? '예: narrator 말투 규칙, 이미지 명령 형식, 상태창 포맷, 스탯 계산 규칙...'
+          : '예: 분석 관점, 참고할 세계관/캐릭터 기준, 노트 작성 스타일...';
+        const outputInstructionPlaceholder = agent.mode === 'post'
+          ? '예: **Current Response**에 필요한 후처리 요소만 추가하세요. 분석 메모, 설명, 변경 목록은 출력하지 마세요.'
+          : '예: 이번 입력에서 다음 모델이 참고할 관찰과 제안만 간결하게 정리하세요.';
 
         root.innerHTML = `<h2>Agent Editor</h2>
           <div class="field"><label for="edit_name">Name</label><input id="edit_name" type="text" value="${escHtml(agent.name)}"></div>
           <label class="checkline"><input id="edit_enabled" type="checkbox" ${agent.enabled ? 'checked' : ''}> 활성화</label>
           <div class="field"><label for="edit_modelPresetId">Model Preset</label>${modelPresetSelect('edit_modelPresetId', agent.modelPresetId, modelPresetsState)}</div>
           ${postModeEditor}
-          <div class="field"><label for="edit_systemPrompt">System Prompt</label><textarea id="edit_systemPrompt">${escHtml(agent.systemPrompt)}</textarea></div>
-          <div class="field"><label for="edit_outputInstruction">Output Instruction</label><textarea id="edit_outputInstruction">${escHtml(agent.outputInstruction)}</textarea></div>
+          <div class="field"><label for="edit_systemPrompt">System Prompt</label><div class="example-url">역할, 스타일, 세계관 규칙, 출력 형식의 기준을 적으세요. 이번 턴에 무엇을 수정/추가할지는 Output Instruction에 적는 편이 안정적입니다.</div><textarea id="edit_systemPrompt" placeholder="${escHtml(systemPromptPlaceholder)}">${escHtml(agent.systemPrompt)}</textarea></div>
+          <div class="field"><label for="edit_outputInstruction">Output Instruction</label><div class="example-url">이번 입력에 적용할 작업을 적으세요. System Prompt의 기준을 반복하기보다 Current Response나 Current User Input에 무엇을 할지 적는 편이 안정적입니다.</div><textarea id="edit_outputInstruction" placeholder="${escHtml(outputInstructionPlaceholder)}">${escHtml(agent.outputInstruction)}</textarea></div>
           ${assistantPrefillEditor}
           <label class="checkline"><input id="edit_includeSettingBlocks" type="checkbox" ${agent.includeSettingBlocks ? 'checked' : ''}> 설정 정보 포함 (캐릭터/페르소나/작노/로어북)</label>
           <label class="checkline"><input id="edit_includeGlobalNoteReplacement" type="checkbox" ${agent.includeGlobalNoteReplacement ? 'checked' : ''}> 글로벌 노트 덮어쓰기 포함</label>
