@@ -11,6 +11,10 @@ Pending unreleased changes since v1.1.23:
 - Added a local Ollama Cloud prompt test utility for Run Inspector prompt dumps.
 - The utility can replay prompts as original, remove only context guard system messages, merge all system messages into a single leading system message, keep only the first system message, or remove generated guard system messages.
 - The utility writes payload, response, content, and summary files, and reports status-window format hints plus possible previous-response leakage snippets.
+- Converted pre-agent and post-agent prompts to a single leading system message with dynamic `Agents! Message Protocol` text.
+- Replaced intermediate guard system messages with grouped user data blocks: `<Reference Context Blocks>`, `<Immediate Turn Context Blocks>`, and `<Task Blocks>`.
+- Changed latest previous assistant guidance to recover only explicit prior-state values needed for continuity, avoiding status-window wording in the generated protocol.
+- Added post-agent preservation guidance for headings, separators, and structural markers inside `<Current Response>`.
 
 Files touched:
 - `.gitignore`
@@ -30,6 +34,12 @@ Checks run:
 - `python3 scripts/test_ollama_prompt.py --help`
 - `python3 scripts/test_ollama_prompt.py /Users/flopsoda/.codex/attachments/f73687ea-ab01-4fc5-b409-781a1d87f16c/pasted-text.txt --mode no-context-guards --dry-run --out-dir /tmp`
 - `python3 scripts/test_ollama_prompt.py /Users/flopsoda/.codex/attachments/f73687ea-ab01-4fc5-b409-781a1d87f16c/pasted-text.txt --mode single-system --dry-run --out-dir /tmp`
+- JXA syntax compile after single-system prompt refactor with `new Function(...)`
+- `rg -n "referenceContextGuard|immediateTurnContextGuard|agentTaskGuard|status-window values|existing status-window values|상태창 값|직전 출력 형식|messages\\.push\\(\\{ role: 'system'" risu_agents.js` returned no matches
+- Perl static `buildAgentPrompt()` shape assertion: exactly one system role, no system push, group wrappers present, assistant prefill preserved
+- `rg -n "Agents! Message Protocol|Reference Context Blocks|Immediate Turn Context Blocks|Task Blocks|explicit prior-state values|명시적 직전 상태값|Preserve existing headings|Do not output group wrapper tags" risu_agents.js`
+- Created `/tmp/risu_new_single_system_grouped_prompt_v2.txt` as a grouped single-system Run Inspector prompt sample and ran `python3 scripts/test_ollama_prompt.py /tmp/risu_new_single_system_grouped_prompt_v2.txt --mode original --out-dir /tmp`
+- Gemini/Ollama grouped single-system sample produced `# 승인됨`, `## 기록`, zero Markdown status headers, one `[Date: ...]` line, and no previous-response leakage hints
 
 Checks not run:
 - Manual RisuAI Run Inspector/debug log verification was not run.
@@ -40,6 +50,7 @@ Commits:
 - `746b43c` Add Run Inspector copy buttons
 - `962fb5a` Ignore local env files
 - `8dd988d` Add Ollama prompt test utility
+- `bb1459d` Use single-system agent prompts
 
 Release status:
 - Version bump, tag, push, and GitHub Release intentionally skipped until the user requests release.
