@@ -7,8 +7,8 @@ Pending unreleased changes since v1.1.24:
   - Commit: `bcf24bd Add post-agent editor warning badge`
   - Release status: version bump, tag, push, and GitHub Release intentionally skipped pending user approval
 
-- Added a draft Markdown prompt document that separates only the Skyrim post-processing agent's customizable prompt text from the customizable output instruction, so the prompts can be discussed and revised without including hardcoded plugin message protocol.
+- Added a draft Markdown prompt document that separates the Skyrim post-processing agent's customizable system prompt, read-only hardcoded prompt reference, and customizable output instruction so the editable prompt text can be discussed alongside the plugin-appended protocol.
   - Files touched: `docs/skyrim_post_agent_prompt_draft.md`
   - Tests/checks: `git diff --check`
-  - Commits: `b09524f Add Skyrim post-agent prompt draft`; `aeb02b5 Limit Skyrim prompt draft to customizable text`
+  - Commits: `b09524f Add Skyrim post-agent prompt draft`; `aeb02b5 Limit Skyrim prompt draft to customizable text`; `bc40991 Add read-only hardcoded post-agent prompt reference`
   - Release status: version bump, tag, push, and GitHub Release intentionally skipped pending user approval
