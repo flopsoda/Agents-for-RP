@@ -6,3 +6,9 @@ Pending unreleased changes since v1.1.24:
   - Could not run: `node --check risu_agents.js` because `node` is not available on PATH in this shell
   - Commit: `bcf24bd Add post-agent editor warning badge`
   - Release status: version bump, tag, push, and GitHub Release intentionally skipped pending user approval
+
+- Added a draft Markdown prompt document that separates the Skyrim post-processing agent's first system prompt from the per-turn output instruction, with stricter source-of-truth and no-invention rules for narrator lines, image commands, and status windows.
+  - Files touched: `docs/skyrim_post_agent_prompt_draft.md`
+  - Tests/checks: `git diff --check`
+  - Commit: `b09524f Add Skyrim post-agent prompt draft`
+  - Release status: version bump, tag, push, and GitHub Release intentionally skipped pending user approval
