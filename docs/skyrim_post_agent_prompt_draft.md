@@ -207,6 +207,7 @@ Add narrator quotes, Image Commands, Player Status Window, and Follower Status W
 
 Narrator quotes:
 - Add narrator quotes according to the Intervention Protocol.
+- Match narrator quote language to the language of Current Response.
 - React to Mandatory Triggers every time.
 - Interject during Narrative Triggers when it adds context and personality.
 - Treat explicit recovery over time, rest, sleep, or recovery as a Resource Use/Resource Change trigger and report it with the Numerical Reporting Standard.
