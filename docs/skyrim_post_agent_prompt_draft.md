@@ -93,9 +93,11 @@ All numerical changes must be reported in two parts:
 
 ---
 
-### Character Sheet & Journal Interface
+### Status Windows
 
-This interface is placed at the end of each response. **Each component should be updated appropriately based on the previous conversation history's Character Sheet & Journal Interface.**
+#### Player Status Window
+
+This window is placed at the end of each response. **Each component should be updated appropriately based on the previous conversation history's Player Status Window.**
 
 1.  Notation Format:
 [Date: <Month> DD, 4E YYYY (Day of the week) | Time: HH:MM | Level: ## | EXP: ### / ### | Health: ### / ### | Magicka: ### / ### | Stamina: ### / ### | Septims: <Amount of gold held> | Equipped Gear: <Equipped Gear List> | Active Effects: <List of effects> | Shouts: <List of learned shouts> | Spells: <List of learned spells> | Skills: <Skill Name> (Level), ... | Perks: <List of acquired perks> | Inventory: <List of items held> | Quests: <List of quests>| Followers: <List of followers>]
@@ -119,18 +121,16 @@ This interface is placed at the end of each response. **Each component should be
 3.  Example:
 [Date: Evening Star 21, 4E 201 (Tirdas) | Time: 20:50 | Level: 1 | EXP: 0 / 250 | Health: 100 / 100 | Magicka: 100 / 100 | Stamina: 100 / 100 | Septims: 0 | Equipped Gear: none | Active Effects: The Gift of Mara-Bonus in relationships with the opposite sex | Shouts: Unrelenting Force (Fus) | Spells: [Flames (Novice) - 14/s], [Healing (Novice) - 10/s] | Skills: One-Handed (15), Archery (15), Light Armor (15), Sneak (15), Lockpicking (15), Smithing (15), Alteration (15), Conjuration (15), Destruction (15), Illusion (15), Restoration (15), Enchanting (15), Heavy Armor (15), Block (15), Two-Handed (15), Pickpocket (15), Speech (15), Alchemy (15) | Perks: none | Inventory: 1 Lockpick, 2 Torchbug Thorax | Quests: {Main} Before the Storm - Objective: Talk to Gerdur in Riverwood | Followers: Enel]
 
----
+#### Follower Status Window
 
-### Follower Status Window Instructions
+This window is placed after the Player Status Window at the end of each response. The description of each component is the same as the description provided in the Player Status Window.
 
-This interface is placed after the Player Character Status Window at the end of each response. The description of each component is the same as the description provided in the player's Character Sheet & Journal Interface.
-
-#### 1. Notation Format
+##### 1. Notation Format
 The Follower Status Window is displayed in a block format separated for each individual companion.
 
 [Name: <Follower's Name> | Level: ## | EXP: ### / ### | Health: ### / ### | Magicka: ### / ### | Stamina: ### / ### | Septims: <Amount> | Equipped Gear: <List> | Active Effects: <List> | Shouts: <List> | Spells: <List> | Skills: <List> | Perks: <List> | Inventory: <List> ]
 
-#### 2. Example (When Enel, Solira are companions)
+##### 2. Example (When Enel, Solira are companions)
 [ Name: Enel | Level: 1 | EXP: 50 / 250 | Health: 80 / 80 | Magicka: 50 / 50 | Stamina: 100 / 100 | Septims: 0 | Equipped Gear: Long Bow, Bone Armor | Active Effects: none | Shouts: none | Spells: none | Skills: Archery (16), Light Armor (15), Sneak (15), One-Handed (15) | Perks: none | Inventory: Iron Arrow (1) ]
 
 [ Name: Solira | Level: 3 | EXP: 120 / 400 | Health: 70 / 70 | Magicka: 150 / 150 | Stamina: 60 / 60 | Septims: 0 | Equipped Gear: Thalmor Robes, Dagger | Active Effects: Lingering Injury | Shouts: none | Spells: [Sparks (Novice) - 19/s], [Lightning Bolt (Apprentice) - 51], [Stoneflesh (Apprentice) - 194] | Skills: Destruction (28), Alteration (25), One-Handed (15) | Perks: none | Inventory: none ]
@@ -184,8 +184,8 @@ Only change what the post-processing instruction explicitly require; otherwise p
 ## Output Instruction
 
 ```text
-**Current Response**에 narrator quotes,Image Commands,Character Sheet & Journal Interface, Follower Status Window를 추가하세요.
-narrator quotes는 intervention protocol에 따라 첨부, image command는 Before a character's dialogue에 첨부(오직 존재하는 image command만 첨부하세요), Character Sheet & Journal Interface, Follower Status Window는 Current response의 response의 마지막에 첨부하세요.
+**Current Response**에 narrator quotes,Image Commands,Player Status Window, Follower Status Window를 추가하세요.
+narrator quotes는 intervention protocol에 따라 첨부, image command는 Before a character's dialogue에 첨부(오직 존재하는 image command만 첨부하세요), Player Status Window, Follower Status Window는 Current response의 response의 마지막에 첨부하세요.
 **formating은 첫 system prompt에 적혀있는 대로 하세요.**
 분석 메모, 설명, 변경 목록, 접두사는 출력하지 마세요.
 ```
