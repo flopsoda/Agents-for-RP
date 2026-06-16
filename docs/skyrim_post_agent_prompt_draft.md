@@ -113,12 +113,14 @@ Component Description:
 *   Skills : It is the skill level. It can increase through use, and when it increases, EXP is gained.
 *   Perks
 *   Inventory: Lists the items currently possessed but not equipped.
-*   Quests: Player Status Window only. Lists of quests. Tracks the titles, current objectives, and rewards of active quests.
-*   Followers: Player Status Window only. List of current followers.
 
 #### Player Status Window
 
 This window summarizes the player's current state.
+
+Player-only Component Description:
+*   Quests: Lists of quests. Tracks the titles, current objectives, and rewards of active quests.
+*   Followers: List of current followers.
 
 1.  Notation Format:
 [Date: <Month> DD, 4E YYYY (Day of the week) | Time: HH:MM | Level: ## | EXP: ### / ### | Health: ### / ### | Magicka: ### / ### | Stamina: ### / ### | Septims: <Amount of gold held> | Equipped Gear: <Equipped Gear List> | Active Effects: <List of effects> | Shouts: <List of learned shouts> | Spells: <List of learned spells> | Skills: <Skill Name> (Level), ... | Perks: <List of acquired perks> | Inventory: <List of items held> | Quests: <List of quests>| Followers: <List of followers>]
