@@ -5643,6 +5643,8 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .card{padding:16px;margin-bottom:14px}
 .card h2{font-size:.93rem;margin-bottom:12px;color:var(--text);font-weight:800}
+.editor-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.editor-title .badge{line-height:1.2}
 .card p{font-size:.82rem;color:var(--muted)}
 .run-log-control-row{display:flex;justify-content:flex-start;margin:-4px 0 14px}
 .run-log-control-row button{box-shadow:0 1px 0 rgba(255,255,255,.06) inset}
@@ -7094,6 +7096,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         </div>`;
       }
 
+      function agentEditorTitleHtml(agent) {
+        const postWarning = agent?.mode === 'post'
+          ? ' <span class="badge neutral post-agent-warning" title="후처리 에이전트는 전처리보다 설정이 어렵고 프롬프트 변화에 민감합니다. 변경 후 충분히 테스트해 주세요.">설정 난이도 높음 · 프롬프트 민감</span>'
+          : '';
+        return `<h2 class="editor-title">Agent Editor${postWarning}</h2>`;
+      }
+
       function renderAgentEditor() {
         const root = document.getElementById('agent-editor');
         if (!root) return;
@@ -7103,7 +7112,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         }
         const agent = findAgentById(pipelineState, selectedAgentId);
         if (!agent) {
-          root.innerHTML = `<h2>Agent Editor</h2>
+          root.innerHTML = `${agentEditorTitleHtml(null)}
             <div class="editor-empty">에이전트 카드를 선택하거나 + 버튼으로 새 에이전트를 추가하세요.</div>
             <div class="mini-actions">
               <button id="agent-import-btn">Agent Import</button>
@@ -7138,7 +7147,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           ? 'Current Response에 무엇을 할지 적으세요. System Prompt의 기준을 반복하기보다 이번 후처리 작업만 구체적으로 적는 편이 안정적입니다.'
           : 'Current User Input을 분석해 어떤 보조 노트를 만들지 적으세요. System Prompt의 기준을 반복하기보다 이번 분석 작업만 구체적으로 적는 편이 안정적입니다.';
 
-        root.innerHTML = `<h2>Agent Editor</h2>
+        root.innerHTML = `${agentEditorTitleHtml(agent)}
           <div class="field"><label for="edit_name">Name</label><input id="edit_name" type="text" value="${escHtml(agent.name)}"></div>
           <label class="checkline"><input id="edit_enabled" type="checkbox" ${agent.enabled ? 'checked' : ''}> 활성화</label>
           <div class="field"><label for="edit_modelPresetId">Model Preset</label>${modelPresetSelect('edit_modelPresetId', agent.modelPresetId, modelPresetsState)}</div>
