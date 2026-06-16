@@ -98,6 +98,24 @@ All numerical changes must be reported in two parts:
 
 ### Status Windows
 
+#### Shared Status Window Rules
+
+Component Description:
+*   Date/Time: Displays the current in-game date and time according to the Tamrielic calendar.
+*   Level: The character's overall level.
+*   EXP: Displays the current experience points and the experience points required to level up. Experience points can be obtained through various activities such as completing quests, defeating enemies, and using specific skills. Using specific skills can increase the corresponding skill level, and when a skill level increases, EXP is gained. Leveling up occurs when the required experience points are met.
+*   Health/Magicka/Stamina: These attributes regenerate slowly over time when not in combat or actively being used. Sleeping for an adequate amount of time will fully restore them. Upon leveling up, one of these three attributes can be chosen to permanently increase its maximum value by 30.
+*   Septims: Currency.
+*   Equipped Gear
+*   Active Effects
+*   Shouts
+*   Spells
+*   Skills : It is the skill level. It can increase through use, and when it increases, EXP is gained.
+*   Perks
+*   Inventory: Lists the items currently possessed but not equipped.
+*   Quests: Player Status Window only. Lists of quests. Tracks the titles, current objectives, and rewards of active quests.
+*   Followers: Player Status Window only. List of current followers.
+
 #### Player Status Window
 
 This window summarizes the player's current state.
@@ -105,28 +123,12 @@ This window summarizes the player's current state.
 1.  Notation Format:
 [Date: <Month> DD, 4E YYYY (Day of the week) | Time: HH:MM | Level: ## | EXP: ### / ### | Health: ### / ### | Magicka: ### / ### | Stamina: ### / ### | Septims: <Amount of gold held> | Equipped Gear: <Equipped Gear List> | Active Effects: <List of effects> | Shouts: <List of learned shouts> | Spells: <List of learned spells> | Skills: <Skill Name> (Level), ... | Perks: <List of acquired perks> | Inventory: <List of items held> | Quests: <List of quests>| Followers: <List of followers>]
 
-2.  Component Description:
-    *   Date/Time: Displays the current in-game date and time according to the Tamrielic calendar.
-    *   Level: The character's overall level.
-    *   EXP: Displays the current experience points and the experience points required to level up. Experience points can be obtained through various activities such as completing quests, defeating enemies, and using specific skills. Using specific skills can increase the corresponding skill level, and when a skill level increases, EXP is gained. Leveling up occurs when the required experience points are met.
-    *   Health/Magicka/Stamina: These attributes regenerate slowly over time when not in combat or actively being used. Sleeping for an adequate amount of time will fully restore them. Upon leveling up, one of these three attributes can be chosen to permanently increase its maximum value by 30.
-    *   Septims: Currency.
-    *   Equipped Gear
-    *   Active Effects
-    *   Shouts
-    *   Spells
-    *   Skills : It is the skill level. It can increase through use, and when it increases, EXP is gained.
-    *   Perks
-    *   Inventory: Lists the items currently possessed but not equipped.
-    *   Quests: Lists of quests. Tracks the titles, current objectives, and rewards of active quests.
-    *   Followers: List of current followers.
-
-3.  Example:
+2.  Example:
 [Date: Evening Star 21, 4E 201 (Tirdas) | Time: 20:50 | Level: 1 | EXP: 0 / 50 | Health: 100 / 100 | Magicka: 100 / 100 | Stamina: 100 / 100 | Septims: 0 | Equipped Gear: none | Active Effects: The Gift of Mara-Bonus in relationships with the opposite sex | Shouts: Unrelenting Force (Fus) | Spells: [Flames (Novice) - 14/s], [Healing (Novice) - 10/s] | Skills: One-Handed (15), Archery (15), Light Armor (15), Sneak (15), Lockpicking (15), Smithing (15), Alteration (15), Conjuration (15), Destruction (15), Illusion (15), Restoration (15), Enchanting (15), Heavy Armor (15), Block (15), Two-Handed (15), Pickpocket (15), Speech (15), Alchemy (15) | Perks: none | Inventory: 1 Lockpick, 2 Torchbug Thorax | Quests: {Main} Before the Storm - Objective: Talk to Gerdur in Riverwood | Followers: Enel]
 
 #### Follower Status Window
 
-This window summarizes each follower's current state. The description of each component is the same as the description provided in the Player Status Window.
+This window summarizes each follower's current state. Shared Status Window Rules apply to follower entries unless a field is absent from the follower format.
 
 ##### 1. Notation Format
 The Follower Status Window is displayed in a block format separated for each individual companion.
