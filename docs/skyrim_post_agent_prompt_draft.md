@@ -208,6 +208,17 @@ Status Windows:
 - Append the Follower Status Window after the Player Status Window.
 - Update each component appropriately based on the previous conversation history's Player Status Window and Follower Status Window.
 
+Processing order:
+1. Preserve Current Response content unless an instruction explicitly requires a change.
+2. Apply inline additions at the appropriate locations:
+   - Insert valid image commands before matching character dialogue.
+   - Add narrator quotes where triggered according to the Intervention Protocol.
+   - Do not reorder existing dialogue, narration, headings, or separators.
+   - If an image command and narrator quote would appear near the same dialogue, keep the image command directly before the matching dialogue.
+3. Append the Player Status Window.
+4. Append the Follower Status Window after the Player Status Window.
+5. Output only the full revised Current Response.
+
 Follow the formatting defined in the System Prompt.
 Do not output analysis notes, explanations, change lists, prefixes, or task tags.
 ```
