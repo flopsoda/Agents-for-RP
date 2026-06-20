@@ -805,6 +805,28 @@ const chat = await Risuai.getChatFromIndex(charIndex, chatIndex);
 await Risuai.setChatToIndex(charIndex, chatIndex, chat);
 ```
 
+### Current Lorebook Entries
+
+> **Local supplemental note:** This API was added in RisuAI `v2026.6.100`
+> and is not yet covered by the upstream narrative plugin guide.
+
+Get raw lorebook entries from the current character or group, the current
+chat, and currently active modules:
+
+```javascript
+const entries = await Risuai.getCurrentLorebookEntries();
+
+for (const entry of entries) {
+  console.log(entry.comment, entry.key, entry.content);
+}
+```
+
+The returned array is a snapshot. Mutating it does not modify RisuAI's stored
+lorebooks. The entries are raw candidates: RisuAI has not applied activation
+key matching, recursive scanning, lorebook decorators, or token budget
+filtering. This API therefore does not identify the exact lorebook entries
+inserted into the final model request.
+
 ## Advanced Features
 
 ### Network Requests
