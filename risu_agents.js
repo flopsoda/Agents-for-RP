@@ -7098,7 +7098,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function agentEditorTitleHtml(agent) {
         const postWarning = agent?.mode === 'post'
-          ? ' <span class="badge neutral post-agent-warning">설정 난이도 높음 · Context Window 2~3 권장</span>'
+          ? ' <span class="badge neutral post-agent-warning">설정 난이도 높음 · Context 2~3 · RisuAI 스트리밍 OFF</span>'
           : '';
         return `<h2 class="editor-title">Agent Editor${postWarning}</h2>`;
       }
