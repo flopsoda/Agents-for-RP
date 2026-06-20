@@ -2,10 +2,10 @@ Pending plugin release changes since v1.1.24:
 
 Use only this section as input for the next plugin release notes.
 
-- Added a post-agent-only warning badge next to the Agent Editor title so users know post-processing agents are harder to tune and more prompt-sensitive than pre-agents. Expanded the visible badge to recommend a Context Window of 2~3, and updated its tooltip to recommend a dedicated post-agent Model Preset so shared presets are not changed unintentionally.
+- Added a post-agent-only warning badge next to the Agent Editor title so users know post-processing agents are harder to tune and more prompt-sensitive than pre-agents. Expanded the visible badge to recommend a Context Window of 2~3, and removed the unavailable native title tooltip so the badge is the only guidance surface.
   - Files touched: `risu_agents.js`
-  - Tests/checks: `git diff --check`; `node --check risu_agents.js`; `rg` verification of the visible recommendation and dedicated-preset tooltip text; static diff verification that the post-agent-only condition and Context Window values were not changed
-  - Commits: `bcf24bd Add post-agent editor warning badge`; `b8e1ea0 Clarify post-agent context guidance`
+  - Tests/checks: `git diff --check`; `node --check risu_agents.js`; `rg` verification of the visible recommendation and absence of a `title` attribute; static diff verification that the post-agent-only condition and Context Window values were not changed
+  - Commits: `bcf24bd Add post-agent editor warning badge`; `b8e1ea0 Clarify post-agent context guidance`; `ca01f28 Remove post-agent badge tooltip`
   - Release status: version bump, tag, push, and GitHub Release intentionally skipped pending user approval
 
 Completed non-release project work:
