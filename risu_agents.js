@@ -7098,7 +7098,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function agentEditorTitleHtml(agent) {
         const postWarning = agent?.mode === 'post'
-          ? ' <span class="badge neutral post-agent-warning" title="후처리 에이전트는 전처리보다 설정이 어렵고 프롬프트 변화에 민감합니다. 변경 후 충분히 테스트해 주세요.">설정 난이도 높음 · 프롬프트 민감</span>'
+          ? ' <span class="badge neutral post-agent-warning" title="후처리 에이전트는 전처리보다 설정이 어렵고 프롬프트 변화에 민감합니다. 원활한 작동을 위해 후처리 에이전트 전용 Model Preset을 만들고 Context Window를 2~3으로 설정하는 것을 권장합니다. 변경 후 충분히 테스트해 주세요.">설정 난이도 높음 · Context Window 2~3 권장</span>'
           : '';
         return `<h2 class="editor-title">Agent Editor${postWarning}</h2>`;
       }
