@@ -1261,12 +1261,56 @@
       };
     }
 
+    function stripRisuThoughtBlocks(value) {
+      const text = String(value ?? '');
+      const openTag = '<Thoughts>';
+      const closeTag = '</Thoughts>';
+      let cursor = 0;
+      let result = '';
+
+      while (cursor < text.length) {
+        const openIndex = text.indexOf(openTag, cursor);
+        if (openIndex < 0) {
+          result += text.slice(cursor);
+          break;
+        }
+
+        result += text.slice(cursor, openIndex);
+        let scanIndex = openIndex + openTag.length;
+        let depth = 1;
+
+        while (depth > 0) {
+          const nextOpen = text.indexOf(openTag, scanIndex);
+          const nextClose = text.indexOf(closeTag, scanIndex);
+          if (nextClose < 0) {
+            return result + text.slice(openIndex);
+          }
+
+          if (nextOpen >= 0 && nextOpen < nextClose) {
+            depth += 1;
+            scanIndex = nextOpen + openTag.length;
+          } else {
+            depth -= 1;
+            scanIndex = nextClose + closeTag.length;
+          }
+        }
+
+        cursor = scanIndex;
+      }
+
+      return result;
+    }
+
+    function normalizeAgentChatContent(value) {
+      return stripRisuThoughtBlocks(value).trim();
+    }
+
     function normalizeRequestMessages(messages) {
       return (Array.isArray(messages) ? messages : [])
         .filter(msg => msg?.role === 'user' || msg?.role === 'assistant')
         .map(msg => ({
           role: msg.role,
-          content: String(msg.content || ''),
+          content: normalizeAgentChatContent(msg.content),
         }))
         .filter(msg => msg.content.trim());
     }
@@ -1365,7 +1409,7 @@
     }
 
     function withVirtualFirstMessage(messages, firstMessageInfo) {
-      const content = String(firstMessageInfo?.message || '').trim();
+      const content = normalizeAgentChatContent(firstMessageInfo?.message);
       if (!content) return { messages, included: false };
 
       const firstStored = Array.isArray(messages) ? messages[0] : null;
@@ -2402,7 +2446,7 @@
           : '';
       if (!role) return null;
       const content = typeof item.data === 'string' || typeof item.data === 'number'
-        ? String(item.data).trim()
+        ? normalizeAgentChatContent(item.data)
         : '';
       return content ? { role, content } : null;
     }
