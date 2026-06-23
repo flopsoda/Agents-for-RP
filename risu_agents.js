@@ -1,7 +1,7 @@
 //@name risu_agents
 //@display-name Agents!
 //@api 3.0
-//@version 1.1.28
+//@version 1.1.29
 //@update-url https://raw.githubusercontent.com/flopsoda/Agents-for-RP/main/risu_agents.js
 //@arg agents_provider string Analysis agent provider label. e.g. openai
 //@arg agents_base_url string Analysis agent API base URL. e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://api.deepseek.com, https://ollama.com/v1, or Agent Platform (구 Vertex AI) OpenAI-compatible endpoint
@@ -37,7 +37,7 @@
 
 (async () => {
   try {
-    const PLUGIN_VERSION = '1.1.28';
+    const PLUGIN_VERSION = '1.1.29';
     let vertexTokenCache = null;
     const DEFAULT_AGENT_PROVIDER = 'openai';
     const DEFAULT_AGENT_BASE_URL = 'https://api.openai.com/v1';
