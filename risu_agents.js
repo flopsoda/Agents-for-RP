@@ -1044,12 +1044,13 @@
         fullWordMatching: sources.character?.loreSettings?.fullWordMatching === true,
         recursiveScanning: sources.character?.loreSettings?.recursiveScanning !== false,
       });
+      const activeLorebooks = filterLibraManagedLorebooks(loreMatch.activeLorebooks);
       const settingBlocks = await buildSettingBlocks(requestMessages, {
         character: sources.character,
         db: sources.db,
         dbAvailable: sources.dbAvailable,
         currentChatContext,
-        activeLorebooks: loreMatch.activeLorebooks,
+        activeLorebooks,
         loreCandidates,
         loreStats: loreMatch.stats,
       });
@@ -1067,7 +1068,7 @@
         latestPreviousAssistantResponse: getLatestPreviousAssistantResponse(contextMessages),
         maxWindow,
         loreCandidates,
-        activeLorebooks: loreMatch.activeLorebooks,
+        activeLorebooks,
         loreStats: loreMatch.stats,
         settingBlocks,
         globalNoteReplacement,
@@ -1238,13 +1239,13 @@
       const loreCandidates = Array.isArray(options.loreCandidates)
         ? options.loreCandidates
         : collectLorebookCandidates(character, db, currentChatContext);
-      const activeLorebooks = Array.isArray(options.activeLorebooks)
+      const activeLorebooks = filterLibraManagedLorebooks(Array.isArray(options.activeLorebooks)
         ? options.activeLorebooks
         : matchActiveLorebooksLikeRisu(normalizeRequestMessages(messages), loreCandidates, {
           scanWindow: 10,
           fullWordMatching: character?.loreSettings?.fullWordMatching === true,
           recursiveScanning: character?.loreSettings?.recursiveScanning !== false,
-        }).activeLorebooks;
+        }).activeLorebooks);
       parts.activeLorebooks = activeLorebooks;
       stats.loreCandidates = loreCandidates.length;
       stats.activeLorebooks = activeLorebooks.length;
@@ -2492,12 +2493,33 @@
       return { persona: null, source: bindedPersona ? 'persona-not-found' : 'missing' };
     }
 
+    function isLibraManagedLore(lore) {
+      if (!lore || typeof lore !== 'object') return false;
+      const comment = String(lore.comment || '').trim();
+      const key = String(lore.key || lore.id || '').trim();
+      const memo = String(lore.memo || '').trim();
+      if (/^LIBRA_CONTAINER$/i.test(memo)) return true;
+      if (/^LIBRA_DATA_/i.test(key)) return true;
+      if (/^lmai(?:_|$|::|-)/i.test(comment)) return true;
+      if (/^lmai(?:_|$|::|-)/i.test(key)) return true;
+      const content = firstNonEmpty(lore.content, lore.prompt, lore.text, lore.entry);
+      if (!content) return false;
+      if (/"memo"\s*:\s*"LIBRA_CONTAINER"/i.test(content)) return true;
+      if (/"category"\s*:\s*"lmai_/i.test(content) && /"entries"\s*:/i.test(content)) return true;
+      return false;
+    }
+
+    function filterLibraManagedLorebooks(lorebooks) {
+      return (Array.isArray(lorebooks) ? lorebooks : []).filter(lore => !isLibraManagedLore(lore));
+    }
+
     function collectLorebookCandidates(character, db, currentChatContext = null) {
       const candidates = [];
       const seen = new Set();
 
       const addLore = (lore, sourcePrefix, sourceType = 'unknown', sourceOrder = 0) => {
         if (!lore) return;
+        if (isLibraManagedLore(lore)) return;
         const content = firstNonEmpty(lore.content, lore.prompt, lore.text, lore.entry);
         if (!content) return;
         const label = firstNonEmpty(lore.comment, lore.name, lore.displayName, sourcePrefix, 'Lorebook');
@@ -2539,6 +2561,8 @@
         id: String(lore.id || `${sourceType}-${sourceOrder}-${index}`),
         label,
         content,
+        comment: String(lore.comment || ''),
+        memo: String(lore.memo || ''),
         source: sourcePrefix,
         sourceType,
         sourceOrder,
@@ -2831,8 +2855,9 @@
     }
 
     function formatSettingBlocks(parts) {
-      const loreText = parts.activeLorebooks.length
-        ? parts.activeLorebooks
+      const activeLorebooks = filterLibraManagedLorebooks(parts.activeLorebooks);
+      const loreText = activeLorebooks.length
+        ? activeLorebooks
             .map((lore, idx) => `[Lorebook ${idx + 1}: ${lore.label}]\n${lore.content}`)
             .join('\n\n')
         : '(No active lorebook matches)';
