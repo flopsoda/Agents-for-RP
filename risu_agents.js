@@ -37,7 +37,7 @@
 
 (async () => {
   try {
-    const PLUGIN_VERSION = '1.1.24';
+    const PLUGIN_VERSION = '1.1.28';
     let vertexTokenCache = null;
     const DEFAULT_AGENT_PROVIDER = 'openai';
     const DEFAULT_AGENT_BASE_URL = 'https://api.openai.com/v1';
