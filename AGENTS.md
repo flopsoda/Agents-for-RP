@@ -55,7 +55,11 @@ This project targets RisuAI plugin development. Use the local reference files in
 
 - After completing and committing a code change, ask the user whether this change should be released as a plugin update.
 - If the user says yes:
-  - Update the `//@version` metadata in `risu_agents.js`.
+  - Update both the `//@version` metadata and the `PLUGIN_VERSION` constant in
+    `risu_agents.js` to the same target version. The settings badge and load log
+    use `PLUGIN_VERSION`.
+  - Before committing the release, verify that `//@version` and
+    `PLUGIN_VERSION` exactly match.
   - Keep `//@name risu_agents` unchanged.
   - Keep existing `//@arg` keys unchanged unless the user explicitly requests a migration.
   - Commit the version bump as a separate release commit.
