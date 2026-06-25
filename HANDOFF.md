@@ -31,3 +31,11 @@
 - Tests/checks: `node --check risu_agents.js`; `git diff --check`; verified the separator heading is the only remaining protocol title string.
 - Commit: `ffc274f Separate agent protocol heading`
 - Release status: Code change committed; plugin version bump, tag, push, and GitHub Release intentionally skipped pending user release decision.
+
+## Markdown agent protocol structure
+
+- What changed: Reworked the shared Agents! message protocol into Markdown-style sections, code-formatted descriptive block names, and a dedicated output contract section while preserving raw output tags and the existing data block format.
+- Files touched: `risu_agents.js`
+- Tests/checks: `node --check risu_agents.js`; `git diff --check`; static protocol structure check for Markdown headings, code-formatted block list names, raw memory tags, raw Current Response guard text, and unchanged Past Events Summary description.
+- Commit: `b47a8bb Structure agent protocol as markdown`
+- Release status: Code change committed; plugin version bump, tag, push, and GitHub Release intentionally skipped pending user release decision.
