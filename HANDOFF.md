@@ -15,3 +15,11 @@
 - Tests/checks: `git diff --check`
 - Commit: `e84fda9 Add user-facing explanation guidance`
 - Release status: Documentation-only change; plugin version bump, tag, push, and GitHub Release intentionally skipped.
+
+## Hypa Past Events Summary in agent context
+
+- What changed: Added default-enabled per-agent inclusion of RisuAI HypaV3 `<Past Events Summary>` as a Reference Context block, updated prompt protocol block descriptions, carried the summary through pre/post agents, and included it in pre-agent reuse hashing.
+- Files touched: `risu_agents.js`
+- Tests/checks: `node --check risu_agents.js`; `git diff --check`; standalone extraction checks for single, wrapped, multiple, empty, and missing Past Events Summary blocks.
+- Commit: `cd0fc70 Include Hypa summaries in agent context`
+- Release status: Code change committed; plugin version bump, tag, push, and GitHub Release intentionally skipped pending user release decision.
