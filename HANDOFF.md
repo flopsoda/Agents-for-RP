@@ -23,3 +23,11 @@
 - Tests/checks: `node --check risu_agents.js`; `git diff --check`; standalone extraction checks for single, wrapped, multiple, empty, and missing Past Events Summary blocks.
 - Commit: `cd0fc70 Include Hypa summaries in agent context`
 - Release status: Code change committed; plugin version bump, tag, push, and GitHub Release intentionally skipped pending user release decision.
+
+## Agents protocol separator
+
+- What changed: Changed the shared Agents! message protocol heading to `--- Agents! Message Protocol ---` so custom agent system prompts are visually separated from the plugin's protocol instructions.
+- Files touched: `risu_agents.js`
+- Tests/checks: `node --check risu_agents.js`; `git diff --check`; verified the separator heading is the only remaining protocol title string.
+- Commit: `ffc274f Separate agent protocol heading`
+- Release status: Code change committed; plugin version bump, tag, push, and GitHub Release intentionally skipped pending user release decision.
