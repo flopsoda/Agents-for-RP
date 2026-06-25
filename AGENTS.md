@@ -21,6 +21,12 @@ This project targets RisuAI plugin development. Use the local reference files in
 - Only implement code changes when the user explicitly asks for code implementation, a feature, a bug fix, a refactor, or another concrete code change.
 - If the user is asking a question, brainstorming, or discussing possibilities without asking for implementation, answer or discuss first instead of editing code.
 
+## Communication With Users
+
+- When explaining behavior or planned changes to non-code-facing users, describe the user-visible flow, settings, prompts, and data that will be added or changed.
+- Do not lead with internal function names, variable names, or file-level implementation details unless the user explicitly asks for code-level explanation.
+- If code references are necessary, first explain the behavior in plain language, then mention the code location as supporting detail.
+
 ## API v3.0 Rules
 
 - Treat all RisuAI API methods as asynchronous. Always use `await` or `.then()`.
