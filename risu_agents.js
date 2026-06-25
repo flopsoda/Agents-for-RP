@@ -3564,16 +3564,21 @@
       const turnNames = promptSectionNames(turnContextSections);
       const taskNames = promptSectionNames(taskSections);
       const lines = [
-        '--- Agents! Message Protocol ---',
-        'All user messages after this system message are grouped data blocks. Treat group wrapper tags as labels, not content to output.',
+        '---',
+        '# Agents! Message Protocol',
+        '',
+        'All user messages after this system message are grouped data blocks.',
+        'Treat group wrapper tags as labels, not content to output.',
         'Do not output group wrapper tags or input section tags unless the task output contract explicitly requires tags.',
       ];
 
       if (referenceNames.length) {
         lines.push(
           '',
-          'Reference context blocks in this request:',
+          '## Reference Context Blocks',
+          '',
           ...formatPromptBlockNameList(referenceNames, 'reference'),
+          '',
           'Use these blocks only for setting, prior state, continuity, and world understanding.',
           'Do not copy, rewrite, continue, summarize, imitate prose from, or derive output formatting from these blocks.',
         );
@@ -3582,8 +3587,10 @@
       if (turnNames.length) {
         lines.push(
           '',
-          'Immediate turn context blocks in this request:',
+          '## Immediate Turn Context Blocks',
+          '',
           ...formatPromptBlockNameList(turnNames, 'turn'),
+          '',
         );
         lines.push('Do not output these blocks directly.');
       }
@@ -3591,8 +3598,12 @@
       if (taskNames.length) {
         lines.push(
           '',
-          'Task blocks in this request:',
+          '## Task Blocks',
+          '',
           ...formatPromptBlockNameList(taskNames, agent?.mode === 'post' ? 'post-task' : 'pre-task'),
+          '',
+          '## Output Contract',
+          '',
         );
         if (agent?.mode === 'post') {
           lines.push(
@@ -3619,7 +3630,7 @@
     function formatPromptBlockNameList(names, group = '') {
       return names.map(name => {
         const description = promptBlockDescription(name, group);
-        return `- <${name}>: ${description}`;
+        return `- \`<${name}>\`: ${description}`;
       });
     }
 
