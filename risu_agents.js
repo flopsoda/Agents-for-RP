@@ -3564,7 +3564,7 @@
       const turnNames = promptSectionNames(turnContextSections);
       const taskNames = promptSectionNames(taskSections);
       const lines = [
-        'Agents! Message Protocol',
+        '--- Agents! Message Protocol ---',
         'All user messages after this system message are grouped data blocks. Treat group wrapper tags as labels, not content to output.',
         'Do not output group wrapper tags or input section tags unless the task output contract explicitly requires tags.',
       ];
