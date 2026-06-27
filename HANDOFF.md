@@ -15,3 +15,11 @@
 - Tests/checks run: `node --check risu_agents.js`; `git diff --check`.
 - Commit: `b1ec3a7 Refine character pin controls`.
 - Release status: Version bump, tag, push, and GitHub Release intentionally skipped until the user asks to release this as a plugin update.
+
+## Character pin header placement
+
+- What changed: Moved Character Pin controls into the Pipeline Builder title row, restored the Pipeline Preset row to preset/actions only, and removed the extra boxed container around the pin action buttons.
+- Files touched: `risu_agents.js`.
+- Tests/checks run: `node --check risu_agents.js`; `git diff --check`.
+- Commit: `71d98f3 Move character pin into builder header`.
+- Release status: Version bump, tag, push, and GitHub Release intentionally skipped until the user asks to release this as a plugin update.
