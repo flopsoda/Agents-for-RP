@@ -5891,6 +5891,9 @@ h1::before{content:"";width:32px;height:22px;border-radius:6px;background:var(--
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .card{padding:16px;margin-bottom:14px}
 .card h2{font-size:.93rem;margin-bottom:12px;color:var(--text);font-weight:800}
+.pipeline-builder-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px}
+.pipeline-builder-head h2{margin-bottom:0;flex:0 0 auto}
+.pipeline-builder-head .character-pin-field{max-width:min(860px,72%);flex:1 1 auto}
 .editor-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .editor-title .badge{line-height:1.2}
 .card p{font-size:.82rem;color:var(--muted)}
@@ -5927,16 +5930,16 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .error-text{color:#ff9b9b;overflow-wrap:anywhere}
 .help-list{display:grid;gap:9px;font-size:.84rem;color:#cfcfcf}.help-list li{margin-left:18px}
 .pipeline-shell,.inspector-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.6fr);gap:14px;align-items:start}
-.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,380px) minmax(260px,1fr) auto;gap:12px;align-items:end;margin-bottom:12px}
+.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,480px) auto;gap:12px;align-items:end;margin-bottom:12px}
 .pipeline-preset-field{margin-bottom:0}
 .pipeline-preset-controls select{height:49px}
 .character-pin-field{margin-bottom:0;min-width:0}
-.character-pin-row{min-height:49px;display:grid;grid-template-columns:minmax(150px,.8fr) auto minmax(180px,1fr);gap:8px;align-items:center;min-width:0}
-.character-pin-name,.character-pin-actions,.character-pin-status{min-height:49px;border:1px solid var(--line-strong);background:#121212;border-radius:6px;padding:10px 12px}
-.character-pin-name{display:flex;align-items:center;font-size:.86rem;font-weight:800;color:#e9e9e9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.character-pin-actions{display:flex;align-items:center;justify-content:center;gap:7px;flex:0 0 auto;padding:6px}
-.character-pin-actions button{height:35px;border-radius:8px;padding:7px 11px;font-size:.78rem}
-.character-pin-status{display:flex;align-items:center;justify-content:flex-end;text-align:right;font-size:.8rem;font-weight:750;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.character-pin-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.character-pin-name,.character-pin-status{min-height:38px;border:1px solid var(--line-strong);background:#121212;border-radius:6px;padding:8px 11px}
+.character-pin-name{display:flex;align-items:center;font-size:.82rem;font-weight:800;color:#e9e9e9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:150px;max-width:240px}
+.character-pin-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.character-pin-actions button{height:38px;border-radius:8px;padding:7px 11px;font-size:.78rem}
+.character-pin-status{display:flex;align-items:center;justify-content:flex-end;text-align:right;font-size:.78rem;font-weight:750;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:220px;max-width:430px}
 .character-pin-status.pinned{color:#83e79b}
 .character-pin-status.missing{color:#ffb0b0}
 .character-pin-status.unavailable{color:var(--muted-2)}
@@ -6005,8 +6008,8 @@ button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 1180px){.pipeline-preset-controls{grid-template-columns:minmax(220px,360px) minmax(260px,1fr)}.pipeline-preset-actions{grid-column:1 / -1;justify-content:flex-start}}
-@media (max-width: 860px){.wrap,.actions-inner{width:100%;padding-left:14px;padding-right:14px}.wrap{padding-top:20px;padding-bottom:104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.shortcut-row,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls,.character-pin-row{grid-template-columns:1fr}.shortcut-actions{justify-content:flex-start}.pipeline-preset-actions{justify-content:flex-start}.character-pin-actions{justify-content:flex-start}.character-pin-status{justify-content:flex-start;text-align:left}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
+@media (max-width: 1180px){.pipeline-builder-head{align-items:flex-start;flex-direction:column}.pipeline-builder-head .character-pin-field{max-width:100%;width:100%}.character-pin-row{justify-content:flex-start;flex-wrap:wrap}.character-pin-status{justify-content:flex-start;text-align:left;max-width:min(100%,520px)}.pipeline-preset-controls{grid-template-columns:minmax(220px,360px) auto}.pipeline-preset-actions{grid-column:1 / -1;justify-content:flex-start}}
+@media (max-width: 860px){.wrap,.actions-inner{width:100%;padding-left:14px;padding-right:14px}.wrap{padding-top:20px;padding-bottom:104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.shortcut-row,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.shortcut-actions{justify-content:flex-start}.pipeline-preset-actions{justify-content:flex-start}.character-pin-name,.character-pin-status{max-width:100%;width:100%}.character-pin-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
 `;
     }
 
@@ -6746,7 +6749,10 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
   <div id="msg" class="msg"></div>
 
   <div class="card">
-    <h2>Pipeline Builder</h2>
+    <div class="pipeline-builder-head">
+      <h2>Pipeline Builder</h2>
+      <div id="character-pin-controls" class="character-pin-field"></div>
+    </div>
     <div id="pipeline-preset-controls" class="pipeline-preset-controls"></div>
     <div class="pipeline-shell">
       <div id="pipeline-rows" class="pipeline-rows"></div>
@@ -7012,11 +7018,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
 
       function renderPipelinePresetControls() {
         const root = document.getElementById('pipeline-preset-controls');
+        renderCharacterPinControls();
         if (!root) return;
         const presets = pipelinePresetStoreState.presets || [];
         const hasAgents = pipelineHasAgents(pipelineState);
         const hasEnabledAgents = pipelineHasEnabledAgents(pipelineState);
-        const pinStatus = currentCharacterPinStatus();
         root.innerHTML = `
           <div class="field pipeline-preset-field">
             <label for="pipeline_preset_select">Pipeline Preset</label>
@@ -7025,17 +7031,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
                 `<option value="${escHtml(preset.id)}" ${preset.id === activePipelinePresetId ? 'selected' : ''}>${escHtml(preset.name)}</option>`
               ).join('')}
             </select>
-          </div>
-          <div class="field character-pin-field">
-            <label>Character Pin</label>
-            <div class="character-pin-row">
-              <span class="character-pin-name" title="${escHtml(pinStatus.characterTitle)}">캐릭터: ${escHtml(pinStatus.characterName)}</span>
-              <span class="character-pin-actions">
-                <button id="character-pipeline-pin-btn" type="button" ${pinStatus.canPin ? '' : 'disabled'}>${escHtml(pinStatus.pinButtonText)}</button>
-                ${pinStatus.hasPin ? `<button id="character-pipeline-unpin-btn" class="ghost" type="button">해제</button>` : ''}
-              </span>
-              <span class="character-pin-status ${escHtml(pinStatus.statusClass)}" title="${escHtml(pinStatus.statusText)}">${escHtml(pinStatus.statusText)}</span>
-            </div>
           </div>
           <div class="pipeline-preset-actions">
             <button id="pipeline-new-btn">새 파이프라인</button>
@@ -7058,8 +7053,6 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           renderPipeline();
           renderAgentEditor();
         });
-        document.getElementById('character-pipeline-pin-btn')?.addEventListener('click', pinCurrentCharacterPipelinePreset);
-        document.getElementById('character-pipeline-unpin-btn')?.addEventListener('click', unpinCurrentCharacterPipelinePreset);
         document.getElementById('pipeline-new-btn')?.addEventListener('click', addPipelinePreset);
         document.getElementById('pipeline-duplicate-btn')?.addEventListener('click', duplicatePipelinePreset);
         document.getElementById('pipeline-rename-btn')?.addEventListener('click', renamePipelinePreset);
@@ -7068,6 +7061,23 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         document.getElementById('pipeline-export-btn')?.addEventListener('click', exportPipelinePreset);
         document.getElementById('pipeline-import-btn')?.addEventListener('click', () => document.getElementById('pipeline-import-file')?.click());
         document.getElementById('pipeline-import-file')?.addEventListener('change', importPipelinePresetFile);
+      }
+
+      function renderCharacterPinControls() {
+        const root = document.getElementById('character-pin-controls');
+        if (!root) return;
+        const pinStatus = currentCharacterPinStatus();
+        root.innerHTML = `
+          <div class="character-pin-row">
+            <span class="character-pin-name" title="${escHtml(pinStatus.characterTitle)}">캐릭터: ${escHtml(pinStatus.characterName)}</span>
+            <span class="character-pin-actions">
+              <button id="character-pipeline-pin-btn" type="button" ${pinStatus.canPin ? '' : 'disabled'}>${escHtml(pinStatus.pinButtonText)}</button>
+              ${pinStatus.hasPin ? `<button id="character-pipeline-unpin-btn" class="ghost" type="button">해제</button>` : ''}
+            </span>
+            <span class="character-pin-status ${escHtml(pinStatus.statusClass)}" title="${escHtml(pinStatus.statusText)}">${escHtml(pinStatus.statusText)}</span>
+          </div>`;
+        document.getElementById('character-pipeline-pin-btn')?.addEventListener('click', pinCurrentCharacterPipelinePreset);
+        document.getElementById('character-pipeline-unpin-btn')?.addEventListener('click', unpinCurrentCharacterPipelinePreset);
       }
 
       function currentCharacterPinStatus() {
