@@ -51,6 +51,7 @@
     const MODEL_PRESET_UNSET_LABEL = '모델 프리셋 설정하지 않음';
     const PIPELINE_PRESETS_STORAGE_KEY = 'risu_agents_pipeline_presets_v1';
     const PIPELINE_PRESET_STORE_VERSION = 1;
+    const CHARACTER_PIPELINE_PINS_VERSION = 1;
     const AGENT_EXPORT_KIND = 'risu-agents.agent-preset';
     const PIPELINE_EXPORT_KIND = 'risu-agents.pipeline-preset';
     const DEFAULT_PROVIDER_ORDER = ['openai', 'google', 'claude', 'vertex-ai', 'deepseek', 'ollama'];
@@ -304,6 +305,7 @@
         shortcuts,
         pipeline,
         pipelinePresetStore: vault.pipelinePresetStore || null,
+        characterPipelinePins: vault.characterPipelinePins || null,
       };
       try {
         updateConfigCache(config);
@@ -434,6 +436,7 @@
         providerKeys,
         pipeline: activePipeline ? normalizePipelineConfig(activePipeline, modelPresets) : null,
         pipelinePresetStore,
+        characterPipelinePins: normalizeCharacterPipelinePins(conf?.characterPipelinePins),
       };
     }
 
@@ -3202,6 +3205,106 @@
       };
     }
 
+    function normalizeCharacterPipelinePins(raw) {
+      const parsed = parseMaybeJson(raw, null);
+      const sourcePins = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.pins && typeof parsed.pins === 'object'
+        ? parsed.pins
+        : {};
+      const pins = {};
+      Object.entries(sourcePins).forEach(([characterId, pin]) => {
+        const id = String(characterId || '').trim();
+        const pipelinePresetId = String(pin?.pipelinePresetId || '').trim();
+        if (!id || !pipelinePresetId) return;
+        pins[id] = {
+          pipelinePresetId,
+          characterName: String(pin?.characterName || '').trim(),
+          updatedAt: String(pin?.updatedAt || ''),
+        };
+      });
+      return {
+        version: CHARACTER_PIPELINE_PINS_VERSION,
+        pins,
+      };
+    }
+
+    function currentCharacterDisplayName(character) {
+      return firstNonEmpty(character?.nickname, character?.name) || '(알 수 없는 캐릭터)';
+    }
+
+    async function getCurrentCharacterPinTarget(debugLog = false) {
+      try {
+        const character = await Risuai.getCharacter();
+        const characterId = String(character?.chaId || '').trim();
+        return {
+          available: Boolean(characterId),
+          character,
+          characterId,
+          characterName: currentCharacterDisplayName(character),
+          error: characterId ? '' : 'character.chaId unavailable',
+        };
+      } catch (err) {
+        if (debugLog) console.log(`Agents! character pipeline pin: getCharacter failed: ${err.message}`);
+        return {
+          available: false,
+          character: null,
+          characterId: '',
+          characterName: '(캐릭터 불러오기 실패)',
+          error: err.message || 'getCharacter failed',
+        };
+      }
+    }
+
+    function resolveCharacterPipelinePin(store, characterPipelinePins, characterInfo) {
+      if (!characterInfo?.available || !characterInfo.characterId) {
+        return {
+          pin: null,
+          preset: null,
+          missing: false,
+        };
+      }
+
+      const pins = normalizeCharacterPipelinePins(characterPipelinePins).pins;
+      const pin = pins[characterInfo.characterId] || null;
+      if (!pin) {
+        return {
+          pin: null,
+          preset: null,
+          missing: false,
+        };
+      }
+
+      const preset = (store?.presets || []).find(item => item.id === pin.pipelinePresetId) || null;
+      return {
+        pin,
+        preset,
+        missing: !preset,
+      };
+    }
+
+    async function getPipelineSelection(conf, options = {}) {
+      const store = await getPipelinePresetStore(conf, options);
+      const characterInfo = options.characterInfo || await getCurrentCharacterPinTarget(conf?.debugLog);
+      const pinResolution = resolveCharacterPipelinePin(store, conf?.characterPipelinePins, characterInfo);
+      const preset = pinResolution.preset || getActivePipelinePreset(store);
+      const pipeline = normalizePipelineConfig(preset?.pipeline || defaultPipelineConfig(), conf?.modelPresets);
+
+      if (conf?.debugLog && pinResolution.preset) {
+        console.log(`Agents! character pipeline pin applied: ${characterInfo.characterName} -> ${pinResolution.preset.name}`);
+      } else if (conf?.debugLog && pinResolution.missing) {
+        console.log(`Agents! character pipeline pin missing: ${characterInfo.characterName} -> ${pinResolution.pin?.pipelinePresetId}`);
+      }
+
+      return {
+        store,
+        preset,
+        pipeline,
+        characterInfo,
+        pinned: Boolean(pinResolution.preset),
+        missingPin: pinResolution.missing,
+        pin: pinResolution.pin,
+      };
+    }
+
     function getActivePipelinePreset(store) {
       return (store?.presets || []).find(preset => preset.id === store?.activePresetId) || store?.presets?.[0] || null;
     }
@@ -3282,8 +3385,8 @@
     }
 
     async function getPipelineConfig(conf, options = {}) {
-      const store = await getPipelinePresetStore(conf, options);
-      return normalizePipelineConfig(getActivePipelinePreset(store)?.pipeline || defaultPipelineConfig(), conf?.modelPresets);
+      const selection = await getPipelineSelection(conf, options);
+      return selection.pipeline;
     }
 
     function normalizeAgent(agent, row, column, modelPresets = null) {
@@ -5302,9 +5405,11 @@
       trace?.mark(hadPipelineStoreCache ? 'getPipelinePresetStore cache hit' : 'getPipelinePresetStore fresh load');
       const pipeline = normalizePipelineConfig(getActivePipelinePreset(pipelineStore)?.pipeline || defaultPipelineConfig(), conf.modelPresets);
       trace?.mark('pipeline normalized');
+      const characterInfo = await getCurrentCharacterPinTarget(conf.debugLog);
+      trace?.mark('current character loaded');
       document.body.innerHTML = buildLiteUI(conf, pipeline, pipelineStore);
       trace?.mark('HTML generated');
-      setupLiteHandlers(conf, pipeline, pipelineStore);
+      setupLiteHandlers(conf, pipeline, pipelineStore, characterInfo);
       trace?.mark('handlers setup');
       await Risuai.showContainer('fullscreen');
       trace?.mark('showContainer complete');
@@ -5760,7 +5865,7 @@
   --danger:#ff5d5d;
 }
 body{font-family:Roboto,Arial,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.45}
-.wrap{max-width:1240px;margin:0 auto;padding:24px 20px 104px}
+.wrap{width:calc(100vw - 48px);max-width:1600px;margin:0 auto;padding:24px 20px 104px}
 .top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:18px;margin:-24px -20px 18px;padding:14px 20px;background:rgba(15,15,15,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(16px)}
 .top>div:first-child{min-width:0}
 h1{font-size:1.22rem;font-weight:800;letter-spacing:0;margin-bottom:2px;display:flex;align-items:center;gap:10px}
@@ -5822,9 +5927,18 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .error-text{color:#ff9b9b;overflow-wrap:anywhere}
 .help-list{display:grid;gap:9px;font-size:.84rem;color:#cfcfcf}.help-list li{margin-left:18px}
 .pipeline-shell,.inspector-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.6fr);gap:14px;align-items:start}
-.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:end;margin-bottom:12px}
+.pipeline-preset-controls{display:grid;grid-template-columns:minmax(220px,380px) minmax(260px,1fr) auto;gap:12px;align-items:end;margin-bottom:12px}
 .pipeline-preset-field{margin-bottom:0}
 .pipeline-preset-controls select{height:49px}
+.character-pin-field{margin-bottom:0;min-width:0}
+.character-pin-row{min-height:49px;display:flex;align-items:center;gap:7px;border:1px solid var(--line-strong);background:#121212;border-radius:6px;padding:6px 8px;min-width:0}
+.character-pin-name{font-size:.8rem;font-weight:750;color:#e9e9e9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.character-pin-actions{display:flex;gap:5px;flex:0 0 auto}
+.character-pin-actions button{height:34px;border-radius:8px;padding:7px 10px;font-size:.78rem}
+.character-pin-status{margin-left:auto;min-width:128px;max-width:320px;text-align:right;font-size:.74rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.character-pin-status.pinned{color:#83e79b}
+.character-pin-status.missing{color:#ffb0b0}
+.character-pin-status.unavailable{color:var(--muted-2)}
 .pipeline-preset-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;align-items:center;padding-bottom:0}
 .pipeline-preset-actions button{border-radius:8px;height:49px;display:inline-flex;align-items:center;justify-content:center}
 .file-input-hidden{display:none}
@@ -5885,12 +5999,13 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);bo
 .memory-snapshot{padding:11px}.memory-snapshot.current{border-color:var(--red);background:var(--red-soft)}
 .memory-snapshot-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}.memory-snapshot-title{font-size:.82rem;font-weight:800}
 .actions{position:fixed;left:0;right:0;bottom:0;background:rgba(15,15,15,.97);border-top:1px solid var(--line);padding:10px 16px;z-index:12}
-.actions-inner{max-width:1240px;margin:0 auto;display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
+.actions-inner{width:calc(100vw - 48px);max-width:1600px;margin:0 auto;display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
 button{padding:9px 14px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface-2);color:var(--text);cursor:pointer;font-size:.86rem;font-weight:750}
 button:hover{background:var(--surface-3)}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}button.primary:hover{background:var(--red-hover)}
 button.ghost{background:var(--surface-2);color:#f1f1f1}
-@media (max-width: 860px){.wrap{padding:20px 14px 104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.shortcut-row,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.shortcut-actions{justify-content:flex-start}.pipeline-preset-actions{justify-content:flex-start}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
+@media (max-width: 1180px){.pipeline-preset-controls{grid-template-columns:minmax(220px,360px) minmax(260px,1fr)}.pipeline-preset-actions{grid-column:1 / -1;justify-content:flex-start}}
+@media (max-width: 860px){.wrap,.actions-inner{width:100%;padding-left:14px;padding-right:14px}.wrap{padding-top:20px;padding-bottom:104px}.top{position:static;display:block;margin:-20px -14px 16px;padding:14px}.header-actions{justify-content:flex-start;margin-top:12px}.run-log-control-row{justify-content:flex-start}.status-strip,.grid,.row2,.shortcut-row,.pipeline-shell,.inspector-shell,.preset-shell,.pipeline-preset-controls{grid-template-columns:1fr}.shortcut-actions{justify-content:flex-start}.pipeline-preset-actions{justify-content:flex-start}.character-pin-row{flex-wrap:wrap}.character-pin-status{margin-left:0;text-align:left;max-width:100%;flex-basis:100%}.pipeline-row,.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr) 34px}.inspector-shell .pipeline-row{grid-template-columns:72px minmax(0,1fr)}.provider-key-row{grid-template-columns:1fr}.agent-card{max-width:100%}.run-log-modal{max-height:92vh}}
 `;
     }
 
@@ -6771,12 +6886,13 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       return null;
     }
 
-    function setupLiteHandlers(initialConf, initialPipeline, initialPipelineStore) {
+    function setupLiteHandlers(initialConf, initialPipeline, initialPipelineStore, currentCharacterInfo) {
       let modelPresetsState = normalizeModelPresets(JSON.parse(JSON.stringify(initialConf.modelPresets || [])), initialConf);
       let providerKeysState = { ...(initialConf.providerKeys || {}) };
       let selectedPresetId = modelPresetsState[0]?.id || DEFAULT_MODEL_PRESET_ID;
       let selectedProviderKeyProvider = normalizeProviderValue(modelPresetsState[0]?.provider || initialConf.provider || DEFAULT_AGENT_PROVIDER);
       let pipelinePresetStoreState = normalizePipelinePresetStore(initialPipelineStore, initialPipeline, modelPresetsState);
+      let characterPipelinePinsState = normalizeCharacterPipelinePins(initialConf.characterPipelinePins);
       let activePipelinePresetId = pipelinePresetStoreState.activePresetId;
       let pipelineState = normalizePipelineConfig(getActivePipelinePreset(pipelinePresetStoreState)?.pipeline || initialPipeline, modelPresetsState);
       let selectedAgentId = findFirstAgentId(pipelineState);
@@ -6794,13 +6910,14 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       document.getElementById('save-btn')?.addEventListener('click', async () => {
         try {
           syncActivePipelinePreset();
-          const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState, pipelinePresetStoreState);
+          const next = collectLiteConfig(initialConf, pipelineState, modelPresetsState, providerKeysState, pipelinePresetStoreState, characterPipelinePinsState);
           const shortcutError = validateShortcutConfig(next.shortcuts);
           if (shortcutError) throw new Error(shortcutError);
           await saveLiteConfig(next);
           updateShortcutCache(next.shortcuts);
           shortcutDebugLogCache = next.debugLog === true;
           pipelinePresetStoreState = next.pipelinePresetStore;
+          characterPipelinePinsState = next.characterPipelinePins;
           activePipelinePresetId = pipelinePresetStoreState.activePresetId;
           providerKeysState = { ...(next.providerKeys || {}) };
           renderPipelinePresetControls();
@@ -6898,6 +7015,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         const presets = pipelinePresetStoreState.presets || [];
         const hasAgents = pipelineHasAgents(pipelineState);
         const hasEnabledAgents = pipelineHasEnabledAgents(pipelineState);
+        const pinStatus = currentCharacterPinStatus();
         root.innerHTML = `
           <div class="field pipeline-preset-field">
             <label for="pipeline_preset_select">Pipeline Preset</label>
@@ -6906,6 +7024,17 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
                 `<option value="${escHtml(preset.id)}" ${preset.id === activePipelinePresetId ? 'selected' : ''}>${escHtml(preset.name)}</option>`
               ).join('')}
             </select>
+          </div>
+          <div class="field character-pin-field">
+            <label>Character Pin</label>
+            <div class="character-pin-row">
+              <span class="character-pin-name" title="${escHtml(pinStatus.characterTitle)}">캐릭터: ${escHtml(pinStatus.characterName)}</span>
+              <span class="character-pin-actions">
+                <button id="character-pipeline-pin-btn" type="button" ${pinStatus.canPin ? '' : 'disabled'}>${escHtml(pinStatus.pinButtonText)}</button>
+                ${pinStatus.hasPin ? `<button id="character-pipeline-unpin-btn" class="ghost" type="button">해제</button>` : ''}
+              </span>
+              <span class="character-pin-status ${escHtml(pinStatus.statusClass)}" title="${escHtml(pinStatus.statusText)}">${escHtml(pinStatus.statusText)}</span>
+            </div>
           </div>
           <div class="pipeline-preset-actions">
             <button id="pipeline-new-btn">새 파이프라인</button>
@@ -6928,6 +7057,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           renderPipeline();
           renderAgentEditor();
         });
+        document.getElementById('character-pipeline-pin-btn')?.addEventListener('click', pinCurrentCharacterPipelinePreset);
+        document.getElementById('character-pipeline-unpin-btn')?.addEventListener('click', unpinCurrentCharacterPipelinePreset);
         document.getElementById('pipeline-new-btn')?.addEventListener('click', addPipelinePreset);
         document.getElementById('pipeline-duplicate-btn')?.addEventListener('click', duplicatePipelinePreset);
         document.getElementById('pipeline-rename-btn')?.addEventListener('click', renamePipelinePreset);
@@ -6936,6 +7067,79 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         document.getElementById('pipeline-export-btn')?.addEventListener('click', exportPipelinePreset);
         document.getElementById('pipeline-import-btn')?.addEventListener('click', () => document.getElementById('pipeline-import-file')?.click());
         document.getElementById('pipeline-import-file')?.addEventListener('change', importPipelinePresetFile);
+      }
+
+      function currentCharacterPinStatus() {
+        const characterName = currentCharacterInfo?.characterName || '(알 수 없는 캐릭터)';
+        const characterTitle = currentCharacterInfo?.available
+          ? `${characterName} (${currentCharacterInfo.characterId})`
+          : (currentCharacterInfo?.error || '캐릭터 ID를 가져올 수 없습니다.');
+        if (!currentCharacterInfo?.available || !currentCharacterInfo.characterId) {
+          return {
+            characterName,
+            characterTitle,
+            canPin: false,
+            hasPin: false,
+            pinButtonText: '고정',
+            statusClass: 'unavailable',
+            statusText: '캐릭터 ID 없음',
+          };
+        }
+
+        const resolution = resolveCharacterPipelinePin(pipelinePresetStoreState, characterPipelinePinsState, currentCharacterInfo);
+        if (!resolution.pin) {
+          return {
+            characterName,
+            characterTitle,
+            canPin: Boolean(activePipelinePresetId),
+            hasPin: false,
+            pinButtonText: '고정',
+            statusClass: '',
+            statusText: '기본 프리셋 사용 중',
+          };
+        }
+
+        if (!resolution.preset) {
+          return {
+            characterName,
+            characterTitle,
+            canPin: Boolean(activePipelinePresetId),
+            hasPin: true,
+            pinButtonText: '변경',
+            statusClass: 'missing',
+            statusText: '고정 프리셋 없음',
+          };
+        }
+
+        return {
+          characterName,
+          characterTitle,
+          canPin: Boolean(activePipelinePresetId),
+          hasPin: true,
+          pinButtonText: '변경',
+          statusClass: 'pinned',
+          statusText: `${characterName}에 고정됨: ${resolution.preset.name}`,
+        };
+      }
+
+      function pinCurrentCharacterPipelinePreset() {
+        if (!currentCharacterInfo?.available || !currentCharacterInfo.characterId || !activePipelinePresetId) return;
+        characterPipelinePinsState = normalizeCharacterPipelinePins(characterPipelinePinsState);
+        characterPipelinePinsState.pins[currentCharacterInfo.characterId] = {
+          pipelinePresetId: activePipelinePresetId,
+          characterName: currentCharacterInfo.characterName || '',
+          updatedAt: new Date().toISOString(),
+        };
+        renderPipelinePresetControls();
+        showMsg('현재 선택된 Pipeline Preset을 이 캐릭터에 고정했습니다. 저장 버튼을 눌러 적용하세요.', true);
+      }
+
+      function unpinCurrentCharacterPipelinePreset() {
+        if (!currentCharacterInfo?.available || !currentCharacterInfo.characterId) return;
+        characterPipelinePinsState = normalizeCharacterPipelinePins(characterPipelinePinsState);
+        delete characterPipelinePinsState.pins[currentCharacterInfo.characterId];
+        renderPipelinePresetControls();
+        showMsg('이 캐릭터의 Pipeline Preset 고정을 해제했습니다. 저장 버튼을 눌러 적용하세요.', true);
       }
 
       function pipelineHasAgents(pipeline) {
@@ -7900,10 +8104,11 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
       ).join('')}</select>`;
     }
 
-    function collectLiteConfig(initialConf, pipeline, modelPresets, providerKeys, pipelinePresetStore) {
+    function collectLiteConfig(initialConf, pipeline, modelPresets, providerKeys, pipelinePresetStore, characterPipelinePins) {
       const normalizedPresets = normalizeModelPresets(modelPresets, initialConf, { strictExtraBody: true });
       const firstPreset = normalizedPresets[0] || defaultModelPreset(initialConf);
       const normalizedPipelineStore = normalizePipelinePresetStore(pipelinePresetStore, pipeline, normalizedPresets);
+      const normalizedCharacterPipelinePins = normalizeCharacterPipelinePins(characterPipelinePins);
       const active = getActivePipelinePreset(normalizedPipelineStore);
       if (active) {
         active.pipeline = normalizePipelineConfig(pipeline, normalizedPresets);
@@ -7940,6 +8145,7 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
         proxyDirect: parseBool(getInputValue('agents_proxy_direct'), false),
         pipeline: normalizePipelineConfig(active?.pipeline || pipeline, normalizedPresets),
         pipelinePresetStore: normalizedPipelineStore,
+        characterPipelinePins: normalizedCharacterPipelinePins,
         modelPresets: normalizedPresets,
         providerKeys: normalizedKeys,
       };
@@ -8525,7 +8731,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           return messages;
         }
 
-        const pipeline = await getPipelineConfig(conf);
+        const pipelineSelection = await getPipelineSelection(conf);
+        const pipeline = pipelineSelection.pipeline;
         const runScope = await getAgentMemoryScope(conf.debugLog);
         const chatContext = await loadActualChatContext(messages, conf.debugLog);
         const runContext = await buildPipelineRunContext(messages, chatContext, conf, pipeline);
@@ -8535,6 +8742,8 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           chatContext,
           runContext,
           userInput,
+          pipeline,
+          pipelineSelection,
         };
         const settingBlocks = runContext.settingBlocks;
         const runLogEnabled = isRunLogEnabled(conf);
@@ -8620,7 +8829,9 @@ button.ghost{background:var(--surface-2);color:#f1f1f1}
           return content;
         }
 
-        const pipeline = await getPipelineConfig(conf);
+        const pipeline = lastPipelineContext?.pipeline
+          ? normalizePipelineConfig(lastPipelineContext.pipeline, conf.modelPresets)
+          : await getPipelineConfig(conf);
         const hasPostAgents = pipeline.rows
           .slice(MAIN_ROW_INDEX + 1)
           .some(row => (row.agents || []).some(agent => agent.enabled !== false));
